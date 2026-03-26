@@ -19,7 +19,7 @@ logger = logging.getLogger("moonshotx.risk")
 REGIME_PROFILES = {
     "bull":          {"size_mult": 1.25, "target_pos_pct": 0.05, "max_pos_cap": 20, "min_pos_floor": 6,  "scan_mult": 2.0, "allow_longs": True,  "daily_trade_mult": 1.5, "max_new_per_loop": 3},
     "neutral":       {"size_mult": 1.00, "target_pos_pct": 0.07, "max_pos_cap": 12, "min_pos_floor": 4,  "scan_mult": 2.0, "allow_longs": True,  "daily_trade_mult": 1.2, "max_new_per_loop": 2},
-    "fear":          {"size_mult": 0.60, "target_pos_pct": 0.12, "max_pos_cap": 6,  "min_pos_floor": 2,  "scan_mult": 1.5, "allow_longs": True,  "daily_trade_mult": 0.8, "max_new_per_loop": 1},
+    "fear":          {"size_mult": 0.70, "target_pos_pct": 0.10, "max_pos_cap": 6,  "min_pos_floor": 2,  "scan_mult": 1.5, "allow_longs": True,  "daily_trade_mult": 0.8, "max_new_per_loop": 2},
     "choppy":        {"size_mult": 0.40, "target_pos_pct": 0.15, "max_pos_cap": 5,  "min_pos_floor": 1,  "scan_mult": 1.5, "allow_longs": True,  "daily_trade_mult": 0.6, "max_new_per_loop": 1},
     "bear_mode":     {"size_mult": 0.30, "target_pos_pct": 0.20, "max_pos_cap": 3,  "min_pos_floor": 0,  "scan_mult": 1.0, "allow_longs": False, "daily_trade_mult": 0.5, "max_new_per_loop": 0},
     "extreme_fear":  {"size_mult": 0.00, "target_pos_pct": 1.00, "max_pos_cap": 0,  "min_pos_floor": 0,  "scan_mult": 0.0, "allow_longs": False, "daily_trade_mult": 0.0, "max_new_per_loop": 0},
@@ -122,26 +122,49 @@ class RiskManager:
     def calculate_position_size(
         self, portfolio_value: float, entry_price: float, stop_price: float, regime: str, confidence: float = 0.7
     ) -> int:
+        """Confidence-scaled position sizing.
+        
+        Conviction tiers (the primary sizing driver):
+          >= 0.90  →  2.0x  (very high conviction = scale up aggressively)
+          >= 0.80  →  1.5x  (high conviction = larger position)
+          >= 0.70  →  1.0x  (moderate = standard size)
+          >= 0.60  →  0.6x  (low-moderate = reduced)
+          <  0.60  →  0.3x  (low conviction = minimal skin)
+        """
         p = _get_profile(regime)
         if p["size_mult"] == 0.0 or entry_price <= 0 or stop_price <= 0:
             return 0
 
-        conf_mult = max(0.5, min(1.3, 0.5 + confidence * 0.8))
+        # Conviction-tiered multiplier (primary sizing driver)
+        if confidence >= 0.90:
+            conf_mult = 2.0
+        elif confidence >= 0.80:
+            conf_mult = 1.5
+        elif confidence >= 0.70:
+            conf_mult = 1.0
+        elif confidence >= 0.60:
+            conf_mult = 0.6
+        else:
+            conf_mult = 0.3
+
         risk_pct = BASE_CONFIG["risk_per_trade_pct"] * p["size_mult"] * conf_mult
         dollar_risk = portfolio_value * risk_pct
         stop_distance = abs(entry_price - stop_price) / entry_price
 
-        if stop_distance < 0.001:
-            return 0
+        if stop_distance < 0.005:
+            stop_distance = 0.05   # floor at 5% if stop is suspiciously tight
 
         raw_value = dollar_risk / stop_distance
-        max_value = portfolio_value * p["target_pos_pct"]
+        # Confidence also lifts the position cap for high-conviction picks
+        max_pct = p["target_pos_pct"] * (1.0 + max(0, confidence - 0.7))  # e.g. 0.85 conv → +15% cap
+        max_value = portfolio_value * min(max_pct, 0.20)                  # absolute ceiling: 20% of portfolio
         position_value = min(raw_value, max_value)
 
         if position_value < BASE_CONFIG["min_position_value"]:
             return 0
 
         shares = int(position_value / entry_price)
+        logger.info(f"Size calc: conv={confidence:.2f} conf_mult={conf_mult}x regime_mult={p['size_mult']}x → ${position_value:,.0f} = {shares} shares @ ${entry_price:.2f}")
         return max(1, shares)
 
     # ── Recording ─────────────────────────────────────────────────────────

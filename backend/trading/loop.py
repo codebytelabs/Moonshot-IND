@@ -199,10 +199,11 @@ class TradingLoop:
                 in_blackout, _ = await is_in_blackout(ticker)
                 if in_blackout:
                     continue
-                await self._execute_entry(entry, open_count, open_positions, portfolio_value, regime)
-                open_count += 1
-                open_tickers.add(ticker)
-                fired.append(ticker)
+                executed = await self._execute_entry(entry, open_count, open_positions, portfolio_value, regime)
+                if executed:
+                    open_count += 1
+                    open_tickers.add(ticker)
+                    fired.append(ticker)
             self._premarket_queue = [r for r in self._premarket_queue if r["ticker"] not in fired]
             if fired:
                 logger.info(f"[PRE-MARKET] Fired entries: {fired}")
@@ -290,13 +291,14 @@ class TradingLoop:
                     "portfolio_value": portfolio_value,
                     "regime": regime,
                 }
-                await self._execute_entry(entry_data, open_count, open_positions, portfolio_value, regime)
-                open_count += 1
-                open_tickers.add(ticker)
-                new_this_loop += 1
+                executed = await self._execute_entry(entry_data, open_count, open_positions, portfolio_value, regime)
+                if executed:
+                    open_count += 1
+                    open_tickers.add(ticker)
+                    new_this_loop += 1
 
-    async def _execute_entry(self, entry_data: dict, open_count: int, open_positions: list, portfolio_value: float, regime: str):
-        """Submit a market order + stop for an approved entry. Works for both live and pre-market queue."""
+    async def _execute_entry(self, entry_data: dict, open_count: int, open_positions: list, portfolio_value: float, regime: str) -> bool:
+        """Submit a market order + stop for an approved entry. Returns True if order placed."""
         ticker = entry_data["ticker"]
         result = entry_data.get("result", {})
         md = entry_data.get("md", {})
@@ -306,30 +308,45 @@ class TradingLoop:
         in_cooldown, cooldown_reason = self.position_mgr.is_in_cooldown(ticker)
         if in_cooldown:
             logger.info(f"Entry BLOCKED for {ticker}: {cooldown_reason}")
-            return
+            return False
 
         # ── Intraday momentum gate: only buy if stock is trending UP now ──
         confirmed, reason = await confirm_intraday_momentum(self.alpaca, ticker, regime)
         if not confirmed:
             logger.info(f"Entry BLOCKED for {ticker}: intraday momentum failed — {reason}")
-            return
+            return False
 
         entry_price = float(plan.get("entry_price", md.get("price", 0)))
         stop_loss = float(plan.get("stop_loss", 0))
         take_profit = float(plan.get("take_profit", 0))
+
+        # ── Default stop from ATR if LLM didn't provide one ─────────────────
+        if stop_loss <= 0 or stop_loss >= entry_price:
+            atr = float(md.get("atr", 0))
+            atr_pct = float(md.get("atr_pct", 0))
+            if atr > 0:
+                stop_loss = round(entry_price - 2.0 * atr, 2)
+            elif atr_pct > 0:
+                stop_loss = round(entry_price * (1 - 2.0 * atr_pct / 100), 2)
+            else:
+                stop_loss = round(entry_price * 0.95, 2)   # 5% default
+            logger.info(f"{ticker}: LLM stop missing, using ATR-based default SL=${stop_loss:.2f}")
+
+        conviction = result.get("verdict", {}).get("conviction_score", 0.7)
         size = self.risk.calculate_position_size(
             portfolio_value=portfolio_value,
             entry_price=entry_price,
             stop_price=stop_loss,
             regime=regime,
-            confidence=result.get("verdict", {}).get("conviction_score", 0.7),
+            confidence=conviction,
         )
         if size <= 0:
-            return
+            logger.info(f"Entry BLOCKED for {ticker}: position size 0 (px=${entry_price:.2f}, sl=${stop_loss:.2f}, conv={conviction:.2f})")
+            return False
 
         order = await self.alpaca.submit_market_order(symbol=ticker, qty=size, side="buy")
         if not order.get("id"):
-            return
+            return False
 
         stop_order = {}
         if stop_loss > 0 and stop_loss < entry_price:
@@ -350,7 +367,7 @@ class TradingLoop:
         }
         await self.db.positions.insert_one(trade_doc)
         self.risk.record_trade(0)
-        logger.info(f"Trade entered: {ticker} x{size} @ ~${entry_price:.2f} (SL=${stop_loss:.2f}, TP=${take_profit:.2f})")
+        logger.info(f"Trade entered: {ticker} x{size} @ ~${entry_price:.2f} (SL=${stop_loss:.2f}, TP=${take_profit:.2f}, conv={conviction:.2f})")
         self.broadcast({
             "type": "trade_executed",
             "ticker": ticker,
@@ -358,9 +375,11 @@ class TradingLoop:
             "price": entry_price,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
+            "conviction": conviction,
             "decision_id": result.get("decision_id"),
             "ts": datetime.now(timezone.utc).isoformat(),
         })
+        return True
 
     async def _pre_market_scan(self, regime: str, regime_data: dict, portfolio_value: float):
         """Run T-25min before open: gather overnight intel, analyze macro, queue best candidates."""
