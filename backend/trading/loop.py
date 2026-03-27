@@ -7,6 +7,7 @@ from trading.correlation import can_add_to_sector, get_concentration_summary
 from trading.earnings import is_in_blackout
 from trading.momentum import confirm_intraday_momentum
 from trading.morning_brief import run_morning_brief
+from trading.market_compare import log_daily_comparison
 from trading.scanner import BROAD_WATCHLIST
 
 logger = logging.getLogger("moonshotx.loop")
@@ -32,6 +33,8 @@ class TradingLoop:
         self._premarket_queue: list = []   # pre-approved entries ready to fire at open
         self._premarket_date: date = None  # date we last ran pre-market scan
         self._last_scan_time = None        # last time we ran entry scanning (5-min gate)
+        self._eod_compare_date: date = None  # date we last ran daily market comparison
+        self._sod_equity: float = 0.0        # start-of-day equity for comparison
 
     async def run(self, state):
         """Main loop — runs every 60s while state.is_running is True."""
@@ -116,6 +119,11 @@ class TradingLoop:
             logger.info(f"Market closed — regime={regime}, skipping trade entry")
             return
 
+        # ── 5a-ii. Capture start-of-day equity (first open cycle) ────────
+        if self._sod_equity <= 0:
+            self._sod_equity = float(account.get("last_equity", portfolio_value))
+            logger.info(f"[SOD] Start-of-day equity captured: ${self._sod_equity:,.2f}")
+
         # ── 5b. EOD force-close check ────────────────────────────────────
         next_close_str = clock.get("next_close", "")
         mins_to_close = None
@@ -140,6 +148,25 @@ class TradingLoop:
                         }},
                     )
                 self.broadcast({"type": "eod_close", "count": len(positions), "ts": datetime.now(timezone.utc).isoformat()})
+
+            # ── Daily market comparison (run once per day after EOD close) ──
+            today = datetime.now(timezone.utc).date()
+            if self._eod_compare_date != today:
+                self._eod_compare_date = today
+                try:
+                    eod_account = await self.alpaca.get_account()
+                    end_equity = float(eod_account.get("equity", portfolio_value))
+                    start_eq = self._sod_equity if self._sod_equity > 0 else float(eod_account.get("last_equity", end_equity))
+                    summary = await log_daily_comparison(
+                        start_equity=start_eq,
+                        end_equity=end_equity,
+                        regime=regime,
+                    )
+                    await self.db.daily_comparisons.insert_one(summary)
+                    self.broadcast({"type": "daily_comparison", **summary})
+                    logger.info(f"[EOD] Daily market comparison logged: MoonshotX={summary.get('portfolio_return_pct')}%")
+                except Exception as e:
+                    logger.error(f"[EOD] Daily market comparison failed: {e}")
             return
 
         # ── 5c. Manage open positions (trailing stops, partials, stale) ──

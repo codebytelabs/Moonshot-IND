@@ -1,4 +1,4 @@
-# MoonshotX 🚀
+# MoonshotX
 
 > **Autonomous AI-powered intraday momentum trading bot** — built on real-time market intelligence, regime-aware risk management, and a batched LLM pipeline that makes institutional-grade entry/exit decisions at a fraction of the cost.
 
@@ -14,6 +14,7 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [Live Performance](#live-performance)
 - [Architecture](#architecture)
 - [Key Features](#key-features)
 - [Tech Stack](#tech-stack)
@@ -24,7 +25,10 @@
 - [Trading Logic](#trading-logic)
 - [Frontend Dashboard](#frontend-dashboard)
 - [Testing](#testing)
+- [Contributing](#contributing)
+- [Changelog](#changelog)
 - [Roadmap](#roadmap)
+- [Disclaimer](#disclaimer)
 
 ---
 
@@ -38,10 +42,24 @@ MoonshotX is a fully autonomous intraday trading system that:
 4. **Protects capital aggressively** — regime-adaptive stop losses (2.5% in fear, 6% in bull), quick-reversal exits, trailing stops, partial profit taking, and a 2-hour re-entry cooldown after losses.
 5. **Closes flat every day** — all positions force-closed by 15:45 EST. No overnight gap risk.
 
-**Current performance context (paper trading):**
+---
+
+## Live Performance
+
+Daily returns are auto-logged after every market close and compared against major indices.
+See **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** for the full history.
+
+| Date | MoonshotX | SPY | QQQ | DIA | Regime |
+|------|-----------|-----|-----|-----|--------|
+| 2026-03-26 | **-0.58%** | -1.79% | -2.39% | -1.04% | fear |
+
+> **Day 1**: Outperformed every major index during a broad selloff. QQQ -2.39%, SMH -4.56%, MoonshotX -0.58%.
+
+**System stats (paper trading):**
 - Portfolio: ~$138,000 on Alpaca Paper
-- LLM pipeline: 2 calls/loop (down from 252) — 99% cost reduction
+- LLM pipeline: 2 calls/loop (down from 252) — **99% cost reduction**
 - Loop cycle: position management every 60s, entry scanning every 5 min
+- LLM cost: ~$0.00134 per scan loop (~$0.40/day)
 
 ---
 
@@ -68,6 +86,11 @@ MoonshotX is a fully autonomous intraday trading system that:
 │  │  Phase B: DEEP LLM  — full trade plans (1 call)         │    │
 │  │      ↓                                                  │    │
 │  │  APPROVE → Cooldown check → Execute market order        │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │              EOD (15:45 EST)                             │    │
+│  │  Force-close all → Cancel orders → Log daily comparison  │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -154,6 +177,7 @@ MoonshotX/
 │   │   ├── loop.py                # Main trading loop orchestrator
 │   │   ├── position_manager.py    # Trailing stops, partials, exits
 │   │   ├── morning_brief.py       # Pre-market intelligence gather + LLM
+│   │   ├── market_compare.py      # Daily performance vs index comparison
 │   │   ├── momentum.py            # Intraday momentum confirmation gate
 │   │   ├── regime.py              # VIX + Fear/Greed regime classifier
 │   │   ├── risk.py                # Position sizing, drawdown limits
@@ -162,6 +186,7 @@ MoonshotX/
 │   │   ├── correlation.py         # Sector concentration guard
 │   │   └── earnings.py            # Earnings calendar blackout
 │   ├── emergentintegrations/      # LLM chat shim (OpenRouter via requests)
+│   ├── __tests__/                 # Unit + integration tests
 │   └── requirements.txt
 ├── frontend/
 │   └── src/
@@ -175,6 +200,8 @@ MoonshotX/
 │       ├── components/            # Shared UI components
 │       └── hooks/
 │           └── useWebSocket.js    # Live WebSocket feed
+├── PERFORMANCE_LOG.md             # Auto-generated daily returns vs indices
+├── CHANGELOG.md                   # Version history + all changes
 ├── restart_all.sh                 # Kill + restart backend + frontend
 ├── start_backend.sh
 └── start_frontend.sh
@@ -379,11 +406,40 @@ pytest tests/ -v
 - All API keys are loaded via `python-dotenv` server-side only
 - React frontend never touches API keys — all calls go through the FastAPI backend
 - Paper trading by default — change `ALPACA_BASE_URL` for live trading
+- Input sanitization on all API endpoints
+- No secrets in client-side code
+
+---
+
+## Contributing
+
+1. Fork the repo
+2. Create a feature branch: `git checkout -b feat/my-feature`
+3. Make changes, add tests, ensure `pytest __tests__/ -v` passes
+4. Commit with conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`
+5. Push and open a Pull Request
+
+**Code style:**
+- `camelCase` for JS/TS functions and variables
+- `PascalCase` for React components
+- `snake_case` for Python functions and variables
+- All new features require tests in `__tests__/`
+- Update `CHANGELOG.md` with every PR
+
+---
+
+## Changelog
+
+See **[CHANGELOG.md](CHANGELOG.md)** for a full history of changes, features, and fixes across all releases.
 
 ---
 
 ## Roadmap
 
+- [x] Batched LLM pipeline (99% cost reduction)
+- [x] Morning intelligence brief (pre-market macro analysis)
+- [x] Regime-adaptive position management
+- [x] Daily performance tracking vs indices
 - [ ] Live trading deployment with position limits
 - [ ] Slack/Telegram alerts for entries, exits, morning brief
 - [ ] Options flow data integration (unusual whales)
@@ -394,6 +450,12 @@ pytest tests/ -v
 
 ---
 
+## Disclaimer
+
+MoonshotX is provided for **educational and research purposes only**. It is not financial advice. Trading stocks involves substantial risk of loss. Past performance (including paper trading results) does not guarantee future results. The authors are not responsible for any financial losses incurred from using this software. Always do your own research and consult a qualified financial advisor before making investment decisions.
+
+---
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
@@ -401,5 +463,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 <div align="center">
-Built with ⚡ by <a href="https://github.com/codebytelabs">codebytelabs</a>
+Built with care by <a href="https://github.com/codebytelabs">codebytelabs</a>
 </div>
