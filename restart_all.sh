@@ -72,6 +72,14 @@ for i in $(seq 1 15); do
     sleep 1
     if curl -sf http://localhost:8001/api/ > /dev/null 2>&1; then
         ok "Backend up (PID $BACKEND_PID) → http://localhost:8001"
+        # Print active LLM provider and models
+        cfg=$(curl -sf http://localhost:8001/api/config 2>/dev/null || echo "{}")
+        provider=$(echo "$cfg" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('llm_provider','?').upper())" 2>/dev/null || echo "?")
+        quick=$(echo "$cfg"   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('quick_model','?'))" 2>/dev/null || echo "?")
+        deep=$(echo "$cfg"    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('deep_model','?'))" 2>/dev/null || echo "?")
+        echo -e "  ${CYAN}LLM Provider:${NC} ${YELLOW}$provider${NC}"
+        echo -e "  ${CYAN}Quick model:${NC}  $quick"
+        echo -e "  ${CYAN}Deep model:${NC}   $deep"
         break
     fi
     if [ $i -eq 15 ]; then

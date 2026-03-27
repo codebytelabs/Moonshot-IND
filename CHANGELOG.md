@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.1] — 2026-03-27
+
+### Changed
+- **Consolidated `.env` to project root** — removed `backend/.env`; root `.env` is now the single source of truth for all backend config. `frontend/.env` remains in `frontend/` (React CRA hard requirement — one line only: `REACT_APP_BACKEND_URL`)
+- `backend/server.py` — `load_dotenv` now points to `ROOT_DIR.parent / ".env"` (root)
+- `backend/__tests__/test_llm_providers.py` — updated path to root `.env`
+- `start_backend.sh` — `ENV_FILE` updated to `$ROOT_DIR/.env`
+
+---
+
 ## [0.4.0] — 2026-03-27
 
 ### Added

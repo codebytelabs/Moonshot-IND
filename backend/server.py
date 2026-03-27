@@ -15,7 +15,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env", override=True)
+ENV_FILE = ROOT_DIR.parent / ".env"   # root-level .env — single source of truth
+load_dotenv(ENV_FILE, override=True)
 sys.path.insert(0, str(ROOT_DIR))
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────

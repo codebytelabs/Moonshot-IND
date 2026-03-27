@@ -18,7 +18,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+load_dotenv(Path(__file__).parent.parent.parent / ".env", override=True)
 
 # ── Config from env ──────────────────────────────────────────────────────────
 OR_KEY      = os.getenv("OPENROUTER_API_KEY", "")
