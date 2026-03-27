@@ -1,11 +1,11 @@
-# MoonshotX — Daily Performance Log
+# MoonshotX-IND — Daily Performance Log
 
-> Auto-generated after each market close. Compares MoonshotX portfolio returns against major indices.
+> Auto-generated after each NSE close (15:10 IST). Compares MoonshotX-IND portfolio returns against Indian market indices.
 
 ---
 
 ## Daily Comparison
 
-| Date | MoonshotX | SPY | QQQ | DIA | IWM | SMH | XLK | XLE | ARKK | Regime | Notes |
-|------|-----------|-----|-----|-----|-----|-----|-----|-----|------|--------|-------|
-| 2026-03-26 | **-0.58%** | -1.79% | -2.39% | -1.04% | -1.74% | -4.56% | -3.11% | +1.57% | -3.59% | fear | Day 1 — paper trading launch |
+| Date | MoonshotX-IND | NIFTY50 | MidCap | BankNifty | IT | Auto | Pharma | Regime | Notes |
+|------|---------------|---------|--------|-----------|----|------|--------|--------|-------|
+| 2026-03-27 | **+0.00%** | -2.12% | -2.52% | -2.73% | -0.60% | -2.83% | -0.41% | fear |  |

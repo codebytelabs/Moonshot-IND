@@ -129,3 +129,9 @@ websockets==16.0
 yarl==1.23.0
 yfinance==1.2.0
 zipp==3.23.0
+
+# ── India/NSE-specific dependencies ──────────────────────────────────────────
+kiteconnect>=4.2.0
+pyotp>=2.9.0
+feedparser>=6.0.11
+nsetools>=1.0.11

@@ -8,19 +8,13 @@ export const LOCAL_TZ_ABBR = (() => {
   } catch { return ''; }
 })();
 
-export const ET_TZ = 'America/New_York';
+export const IST_TZ = 'Asia/Kolkata';
 
-export const ET_TZ_ABBR = (() => {
-  try {
-    return new Intl.DateTimeFormat('en-US', { timeZone: ET_TZ, timeZoneName: 'short' })
-      .formatToParts(new Date())
-      .find(p => p.type === 'timeZoneName')?.value || 'ET';
-  } catch { return 'ET'; }
-})();
+export const IST_TZ_ABBR = 'IST';
 
-export function nowET() {
-  return new Date().toLocaleTimeString('en-US', {
-    timeZone: ET_TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+export function nowIST() {
+  return new Date().toLocaleTimeString('en-IN', {
+    timeZone: IST_TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
 }
 
@@ -46,11 +40,11 @@ export function formatLocalDateTime(isoStr) {
   }) + ' ' + LOCAL_TZ_ABBR;
 }
 
-export function formatETTime(isoStr) {
+export function formatISTTime(isoStr) {
   if (!isoStr) return '—';
-  return new Date(isoStr).toLocaleTimeString('en-US', {
-    timeZone: ET_TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }) + ' ' + ET_TZ_ABBR;
+  return new Date(isoStr).toLocaleTimeString('en-IN', {
+    timeZone: IST_TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }) + ' IST';
 }
 
 export function formatChartLabel(isoStr, timeframe) {

@@ -1,7 +1,7 @@
-"""Daily market comparison logger — records system performance vs major indices.
+"""Daily market comparison logger — records system performance vs NSE/BSE indices.
 
-Runs automatically after EOD force-close. Appends a markdown table row to
-PERFORMANCE_LOG.md at the project root so performance can be tracked over time.
+Runs automatically after NSE EOD force-close (15:10 IST). Appends a markdown
+table row to PERFORMANCE_LOG.md so performance can be tracked over time.
 """
 import asyncio
 import logging
@@ -18,28 +18,26 @@ logger = logging.getLogger("moonshotx.market_compare")
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _LOG_FILE = _PROJECT_ROOT / "PERFORMANCE_LOG.md"
 
-# Indices + sector ETFs to compare against
+# India NSE indices to compare against (yfinance symbols)
 _BENCHMARKS = {
-    "SPY": "S&P 500",
-    "QQQ": "Nasdaq 100",
-    "DIA": "Dow Jones",
-    "IWM": "Russell 2000",
-    "SMH": "Semiconductors",
-    "XLK": "Technology",
-    "XLE": "Energy",
-    "ARKK": "ARK Innovation",
+    "^NSEI":     "NIFTY50",
+    "^NSMIDCP":  "NIFTY MidCap",
+    "^NSEBANK":  "Bank Nifty",
+    "^CNXIT":    "Nifty IT",
+    "^CNXAUTO":  "Nifty Auto",
+    "^CNXPHARMA":"Nifty Pharma",
 }
 
-_HEADER = """# MoonshotX — Daily Performance Log
+_HEADER = """# MoonshotX-IND — Daily Performance Log
 
-> Auto-generated after each market close. Compares MoonshotX portfolio returns against major indices.
+> Auto-generated after each NSE close (15:10 IST). Compares MoonshotX-IND portfolio returns against Indian market indices.
 
 ---
 
 ## Daily Comparison
 
-| Date | MoonshotX | SPY | QQQ | DIA | IWM | SMH | XLK | XLE | ARKK | Regime | Notes |
-|------|-----------|-----|-----|-----|-----|-----|-----|-----|------|--------|-------|
+| Date | MoonshotX-IND | NIFTY50 | MidCap | BankNifty | IT | Auto | Pharma | Regime | Notes |
+|------|---------------|---------|--------|-----------|----|------|--------|--------|-------|
 """
 
 
@@ -127,7 +125,7 @@ async def log_daily_comparison(
     with open(_LOG_FILE, "a") as f:
         f.write(row + "\n")
 
-    logger.info(f"[MARKET_COMPARE] Logged: MoonshotX={_fmt_ret(portfolio_ret)} vs SPY={_fmt_ret(index_returns.get('SPY'))} QQQ={_fmt_ret(index_returns.get('QQQ'))}")
+    logger.info(f"[MARKET_COMPARE] Logged: MoonshotX-IND={_fmt_ret(portfolio_ret)} vs NIFTY50={_fmt_ret(index_returns.get('^NSEI'))} BankNifty={_fmt_ret(index_returns.get('^NSEBANK'))}")
 
     # Return summary for DB/broadcast
     summary = {

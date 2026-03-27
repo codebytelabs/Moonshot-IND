@@ -6,7 +6,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush
 } from 'recharts';
 import { Play, Square, TrendingUp, TrendingDown } from 'lucide-react';
-import { LOCAL_TZ_ABBR, ET_TZ_ABBR, nowET, nowLocal, formatLocalDateTime } from '../utils/time';
+import { LOCAL_TZ_ABBR, IST_TZ_ABBR, nowIST, nowLocal, formatLocalDateTime } from '../utils/time';
 
 const API = process.env.REACT_APP_BACKEND_URL + '/api';
 const n = v => (v != null && v !== '' ? Number(v) : null);
@@ -66,7 +66,7 @@ export default function Dashboard() {
   const [navTimeframe, setNavTimeframe] = useState('1D');
   const [navData, setNavData] = useState([]);
   const [countdown, setCountdown] = useState('');
-  const [clocks, setClocks] = useState({ et: '', local: '' });
+  const [clocks, setClocks] = useState({ ist: '', local: '' });
 
   const fetchNav = useCallback(async (tf) => {
     try {
@@ -114,7 +114,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const tick = () => {
-      setClocks({ et: nowET(), local: nowLocal() });
+      setClocks({ ist: nowIST(), local: nowLocal() });
       if (!account) return setCountdown('');
       const target = account.is_market_open ? account.next_close : account.next_open;
       if (!target) return setCountdown('');
@@ -184,9 +184,9 @@ export default function Dashboard() {
             </span>
             <span style={{ color: 'rgba(255,255,255,0.12)' }}>│</span>
             <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10 }}>
-              <span style={{ color: 'rgba(255,255,255,0.4)' }}>NY </span>
-              <span style={{ color: 'var(--text-primary)' }}>{clocks.et}</span>
-              <span style={{ color: 'rgba(255,255,255,0.4)' }}> {ET_TZ_ABBR}</span>
+              <span style={{ color: 'rgba(255,255,255,0.4)' }}>IST </span>
+              <span style={{ color: 'var(--text-primary)' }}>{clocks.ist}</span>
+              <span style={{ color: 'rgba(255,255,255,0.4)' }}> {IST_TZ_ABBR}</span>
             </span>
             <span style={{ color: 'rgba(255,255,255,0.12)' }}>│</span>
             <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10 }}>
@@ -225,14 +225,14 @@ export default function Dashboard() {
         <StatCard
           testId="portfolio-value-stat"
           label="PORTFOLIO VALUE"
-          value={portfolioValue ? `$${portfolioValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+          value={portfolioValue ? `₹${portfolioValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
           sub="Paper account"
           color="var(--text-primary)"
         />
         <StatCard
           testId="daily-pnl-stat"
           label="DAILY P&L"
-          value={dailyPnl !== undefined ? `${isPositive ? '+' : ''}$${dailyPnl.toFixed(2)}` : '—'}
+          value={dailyPnl !== undefined ? `${isPositive ? '+' : ''}₹${dailyPnl.toFixed(2)}` : '—'}
           sub={`${dailyPnl && portfolioValue ? ((dailyPnl / portfolioValue) * 100).toFixed(2) : '0.00'}% today`}
           color={isPositive ? 'var(--success)' : 'var(--danger)'}
         />
@@ -268,10 +268,10 @@ export default function Dashboard() {
                 return (
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
                     <span style={{ fontFamily: 'JetBrains Mono', fontSize: 20, color: 'var(--text-primary)' }}>
-                      ${last?.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      ₹{last?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </span>
                     <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color }}>
-                      {diff >= 0 ? '+' : ''}${diff.toFixed(2)} ({pct >= 0 ? '+' : ''}{pct.toFixed(3)}%)
+                      {diff >= 0 ? '+' : ''}₹{diff.toFixed(2)} ({pct >= 0 ? '+' : ''}{pct.toFixed(3)}%)
                     </span>
                   </div>
                 );
@@ -309,14 +309,14 @@ export default function Dashboard() {
                 <YAxis
                   domain={['auto', 'auto']}
                   tick={{ fontFamily: 'JetBrains Mono', fontSize: 9, fill: 'var(--text-muted)' }}
-                  tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
+                  tickFormatter={v => `₹${(v / 1000).toFixed(1)}k`}
                   axisLine={false}
                   tickLine={false}
                   width={52}
                 />
                 <Tooltip
                   contentStyle={{ background: '#0D0D10', border: '1px solid var(--border)', fontFamily: 'JetBrains Mono', fontSize: 11, borderRadius: 0 }}
-                  formatter={v => [`$${v?.toLocaleString('en-US', { minimumFractionDigits: 2 })}`, 'NAV']}
+                  formatter={v => [`₹${v?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, 'NAV']}
                   labelStyle={{ color: 'var(--text-muted)', fontSize: 10 }}
                   cursor={{ stroke: 'rgba(0,229,255,0.3)', strokeWidth: 1 }}
                 />
@@ -346,9 +346,9 @@ export default function Dashboard() {
             <div>
               <div style={{ marginBottom: 16 }}><RegimeBadge regime={regime.regime} /></div>
               {[
-                { label: 'VIX', value: regime.vix?.toFixed(1), bar: Math.min(100, (regime.vix / 50) * 100), color: regime.vix > 28 ? '#FF3B30' : regime.vix > 20 ? '#FFCC00' : '#00FF87' },
+                { label: 'VIX', value: regime.india_vix?.toFixed(1), bar: Math.min(100, (regime.india_vix / 50) * 100), color: regime.india_vix > 28 ? '#FF3B30' : regime.india_vix > 20 ? '#FFCC00' : '#00FF87' },
                 { label: 'FEAR/GREED', value: regime.fear_greed?.toFixed(0) + '/100', bar: regime.fear_greed, color: regime.fear_greed < 30 ? '#FF3B30' : regime.fear_greed > 70 ? '#00FF87' : '#FFCC00' },
-                { label: 'SPY 20D', value: (regime.spy_20d_return >= 0 ? '+' : '') + regime.spy_20d_return?.toFixed(2) + '%', bar: Math.min(100, Math.max(0, 50 + regime.spy_20d_return * 5)), color: regime.spy_20d_return >= 0 ? '#00FF87' : '#FF3B30' },
+                { label: 'NIFTY 20D', value: (regime.nifty_20d_return >= 0 ? '+' : '') + regime.nifty_20d_return?.toFixed(2) + '%', bar: Math.min(100, Math.max(0, 50 + regime.nifty_20d_return * 5)), color: regime.nifty_20d_return >= 0 ? '#00FF87' : '#FF3B30' },
                 { label: 'BREADTH', value: (regime.breadth * 100)?.toFixed(0) + '%', bar: regime.breadth * 100, color: regime.breadth > 0.6 ? '#00FF87' : regime.breadth < 0.3 ? '#FF3B30' : '#FFCC00' },
               ].map(({ label, value, bar, color }) => (
                 <div key={label} style={{ marginBottom: 14 }}>
@@ -419,34 +419,34 @@ export default function Dashboard() {
                         }}>{pos.side?.toUpperCase()}</span>
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>{pos.qty}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>${n(pos.entry_price)?.toFixed(2)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--primary)' }}>${n(pos.current_price)?.toFixed(2)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>${n(pos.market_value)?.toFixed(0)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>₹{n(pos.entry_price)?.toFixed(2)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--primary)' }}>₹{n(pos.current_price)?.toFixed(2)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>₹{n(pos.market_value)?.toFixed(0)}</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12, color: n(pos.stop_loss) > 0 ? '#FF3B30' : 'var(--text-muted)' }}>
-                        {n(pos.stop_loss) > 0 ? `$${n(pos.stop_loss).toFixed(2)}` : '—'}
+                        {n(pos.stop_loss) > 0 ? `₹${n(pos.stop_loss).toFixed(2)}` : '—'}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>
                         {pos.trailing_active ? (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                             <span style={{ fontSize: 8, color: '#FF9500', fontFamily: 'JetBrains Mono', letterSpacing: '0.08em', border: '1px solid rgba(255,149,0,0.4)', padding: '1px 3px' }}>TRAIL</span>
-                            <span style={{ color: '#FF9500' }}>${n(pos.trailing_stop)?.toFixed(2)}</span>
+                            <span style={{ color: '#FF9500' }}>₹{n(pos.trailing_stop)?.toFixed(2)}</span>
                           </div>
                         ) : (
                           <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>inactive</span>
                         )}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12, color: '#FFCC00' }}>
-                        {n(pos.target_1) > 0 ? `$${n(pos.target_1).toFixed(2)}` : '—'}
+                        {n(pos.target_1) > 0 ? `₹${n(pos.target_1).toFixed(2)}` : '—'}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12, color: '#FFCC00' }}>
-                        {n(pos.target_2) > 0 ? `$${n(pos.target_2).toFixed(2)}` : '—'}
+                        {n(pos.target_2) > 0 ? `₹${n(pos.target_2).toFixed(2)}` : '—'}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12, color: n(pos.take_profit) > 0 ? '#00FF87' : 'var(--text-muted)' }}>
-                        {n(pos.take_profit) > 0 ? `$${n(pos.take_profit).toFixed(2)}` : '—'}
+                        {n(pos.take_profit) > 0 ? `₹${n(pos.take_profit).toFixed(2)}` : '—'}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                         <div style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: pnlPos ? 'var(--success)' : 'var(--danger)' }}>
-                          {pnlPos ? '+' : ''}${n(pos.unrealized_pnl)?.toFixed(2)}
+                          {pnlPos ? '+' : ''}₹{n(pos.unrealized_pnl)?.toFixed(2)}
                         </div>
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'right' }}>

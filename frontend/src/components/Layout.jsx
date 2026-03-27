@@ -206,7 +206,7 @@ export default function Layout({ children }) {
               PAPER TRADING
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono' }}>
-              Alpaca Markets
+              Zerodha Kite · NSE
             </div>
           </div>
         </nav>

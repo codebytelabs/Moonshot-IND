@@ -1,10 +1,21 @@
-"""Main trading loop — orchestrates all components."""
+"""Main trading loop — India/NSE edition.
+
+Key India-specific changes vs MoonshotX US:
+  • IST (Asia/Kolkata) timezone throughout
+  • NSE market hours: 09:15–15:30 IST
+  • Force squareoff at 15:10 IST (MIS auto-squares at 15:20; we close 10 min early)
+  • Pre-market brief at 08:55 IST (T-20 before open)
+  • KiteSessionManager for daily token refresh before market hours
+  • GTTManager for stop-loss / take-profit instead of Alpaca stop orders
+  • Results gate (block_entry_for_results) replaces US earnings blackout
+"""
 import asyncio
 import logging
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, time as dtime
+from zoneinfo import ZoneInfo
 from trading.position_manager import PositionManager
 from trading.correlation import can_add_to_sector, get_concentration_summary
-from trading.earnings import is_in_blackout
+from trading.results import block_entry_for_results
 from trading.momentum import confirm_intraday_momentum
 from trading.morning_brief import run_morning_brief
 from trading.market_compare import log_daily_comparison
@@ -12,67 +23,130 @@ from trading.scanner import BROAD_WATCHLIST
 
 logger = logging.getLogger("moonshotx.loop")
 
-PRE_MARKET_WINDOW_MINS = 25   # minutes before open to run pre-market scan (includes morning brief)
-PRE_MARKET_CANDIDATES = 10    # how many tickers to pre-analyze
-EOD_CLOSE_MINS = 15           # force-close all positions within 15 min of market close
-EOD_NO_ENTRY_MINS = 30        # block new entries within 30 min of market close
-ENTRY_SCAN_INTERVAL_MINS = 5  # only scan for new entries every 5 min (PM runs every 60s)
+IST = ZoneInfo("Asia/Kolkata")
+
+# ── NSE market timing constants (IST) ────────────────────────────────────
+NSE_OPEN      = dtime(9, 15, tzinfo=IST)
+NSE_CLOSE     = dtime(15, 30, tzinfo=IST)
+FORCE_SQ_TIME = dtime(15, 10, tzinfo=IST)  # MIS auto-squares at 15:20; we close 10 min early
+PRE_BRIEF_TIME = dtime(8, 55, tzinfo=IST)  # run morning brief ~20 min before open
+
+PRE_MARKET_WINDOW_MINS  = 25   # minutes before open to run pre-market scan
+PRE_MARKET_CANDIDATES   = 10   # how many tickers to pre-analyze
+EOD_NO_ENTRY_MINS       = 30   # block new entries within 30 min of NSE close
+ENTRY_SCAN_INTERVAL_MINS = 5   # only scan for new entries every 5 min
+
+
+def _now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def _is_nse_open() -> bool:
+    """Return True if NSE is currently open (Mon–Fri 09:15–15:30 IST)."""
+    now = _now_ist()
+    if now.weekday() >= 5:   # Saturday=5, Sunday=6
+        return False
+    t = now.time().replace(tzinfo=IST)
+    return NSE_OPEN <= t < NSE_CLOSE
+
+
+def _mins_to_nse_open() -> float:
+    """Minutes until next NSE open. Negative if already open."""
+    now = _now_ist()
+    today_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    delta = (today_open - now).total_seconds() / 60
+    return delta
+
+
+def _mins_to_nse_close() -> float:
+    """Minutes until today's NSE close. Negative if already closed."""
+    now = _now_ist()
+    today_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    delta = (today_close - now).total_seconds() / 60
+    return delta
+
+
+def _past_force_sq_time() -> bool:
+    """True if current IST time is past 15:10 (force-squareoff window)."""
+    now = _now_ist()
+    sq = now.replace(hour=15, minute=10, second=0, microsecond=0)
+    return now >= sq
 
 
 class TradingLoop:
-    def __init__(self, db, alpaca, pipeline, regime_manager, scanner, risk_manager, broadcast_fn):
+    def __init__(self, db, kite, pipeline, regime_manager, scanner, risk_manager, broadcast_fn):
         self.db = db
-        self.alpaca = alpaca
+        self.kite = kite           # KiteBroker instance (Alpaca-compatible interface)
         self.pipeline = pipeline
         self.regime = regime_manager
         self.scanner = scanner
         self.risk = risk_manager
         self.broadcast = broadcast_fn
-        self.position_mgr = PositionManager(alpaca, db, broadcast_fn)
+        self.position_mgr = PositionManager(kite, db, broadcast_fn)
         self.loop_count = 0
-        self._premarket_queue: list = []   # pre-approved entries ready to fire at open
-        self._premarket_date: date = None  # date we last ran pre-market scan
-        self._last_scan_time = None        # last time we ran entry scanning (5-min gate)
-        self._eod_compare_date: date = None  # date we last ran daily market comparison
-        self._sod_equity: float = 0.0        # start-of-day equity for comparison
+        self._premarket_queue: list = []    # pre-approved entries ready to fire at open
+        self._premarket_date: date = None   # date we last ran pre-market scan
+        self._last_scan_time = None         # last time we ran entry scanning (5-min gate)
+        self._eod_compare_date: date = None # date we last ran daily market comparison
+        self._sod_equity: float = 0.0       # start-of-day equity for comparison
+        self._token_refreshed_date: date = None  # date of last successful token refresh
 
     async def run(self, state):
         """Main loop — runs every 60s while state.is_running is True."""
-        logger.info("Trading loop started")
+        logger.info("[LOOP] MoonshotX-IND trading loop started (IST timezone, NSE hours)")
         await self.position_mgr.load_cooldowns()
         while state.is_running:
             try:
+                await self._maybe_refresh_token()
                 await self._cycle(state)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Loop cycle error: {e}")
+                logger.error(f"[LOOP] Cycle error: {e}")
             await asyncio.sleep(60)
-        logger.info("Trading loop stopped")
+        logger.info("[LOOP] Trading loop stopped")
+
+    async def _maybe_refresh_token(self):
+        """Refresh Kite access token once per day at ~08:00 IST (before market open)."""
+        now = _now_ist()
+        today = now.date()
+        if self._token_refreshed_date == today:
+            return
+        if now.hour < 8:
+            return   # too early — wait until 08:xx IST
+        try:
+            from broker.kite_session import KiteSessionManager
+            session_mgr = KiteSessionManager()
+            await session_mgr.assert_valid()
+            self._token_refreshed_date = today
+            logger.info("[LOOP] Kite session verified/refreshed for today")
+        except Exception as e:
+            logger.warning(f"[LOOP] Token refresh check failed: {e}")
 
     async def _cycle(self, state):
         self.loop_count += 1
         state.loop_count = self.loop_count
-        logger.info(f"Loop #{self.loop_count} starting")
+        now_ist = _now_ist()
+        logger.info(f"[LOOP] #{self.loop_count} — {now_ist.strftime('%H:%M IST')}")
 
-        # ── 1. Market clock check ──────────────────────────────────────────
-        clock = await self.alpaca.get_clock()
-        is_open = clock.get("is_open", False)
+        # ── 1. NSE market clock (IST-native, no broker API call) ───────────────────
+        is_open        = _is_nse_open()
+        mins_to_open   = _mins_to_nse_open()
+        mins_to_close  = _mins_to_nse_close()
 
-        # ── 2. Get regime ──────────────────────────────────────────────────
+        # ── 2. Get regime ─────────────────────────────────────────────────────────────────
         regime_data = await self.regime.get_current()
         regime = regime_data.get("regime", "neutral")
         state.regime = regime
 
-        # Update regime in DB
         await self.db.regime_history.insert_one({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "regime": regime,
             **{k: v for k, v in regime_data.items() if k not in ("updated_at",)},
         })
 
-        # ── 3. Update account info ─────────────────────────────────────────
-        account = await self.alpaca.get_account()
+        # ── 3. Update account info from Kite ───────────────────────────────────────
+        account = await self.kite.get_account()
         portfolio_value = float(account.get("portfolio_value", 0))
         equity = float(account.get("equity", 0))
         if portfolio_value > 0:
@@ -81,19 +155,19 @@ class TradingLoop:
                 current=equity,
             )
 
-        # ── 3b. Store portfolio NAV snapshot ──────────────────────────────
         if portfolio_value > 0:
             await self.db.nav_snapshots.insert_one({
                 "ts": datetime.now(timezone.utc).isoformat(),
+                "ist": now_ist.isoformat(),
                 "value": portfolio_value,
                 "equity": equity,
                 "regime": regime,
             })
 
-        # ── 4. Sync positions from Alpaca ─────────────────────────────────
+        # ── 4. Sync positions from Kite ───────────────────────────────────────────
         await self._sync_positions()
 
-        # ── 5. Broadcast loop tick ─────────────────────────────────────────
+        # ── 5. Broadcast loop tick ─────────────────────────────────────────────────────
         self.broadcast({
             "type": "loop_tick",
             "loop_count": self.loop_count,
@@ -103,60 +177,53 @@ class TradingLoop:
             "regime_data": regime_data,
             "risk_stats": self.risk.get_stats(),
             "llm_cost_today": round(self.pipeline.llm_cost_today, 4),
+            "ist_time": now_ist.strftime("%H:%M IST"),
             "ts": datetime.now(timezone.utc).isoformat(),
         })
 
         if not is_open:
-            # ── Pre-market scan (T-20 min before open) ───────────────────────
-            next_open_str = clock.get("next_open", "")
-            if next_open_str:
-                next_open_dt = datetime.fromisoformat(next_open_str.replace("Z", "+00:00"))
-                mins_to_open = (next_open_dt - datetime.now(timezone.utc)).total_seconds() / 60
-                today = datetime.now(timezone.utc).date()
-                if 0 < mins_to_open <= PRE_MARKET_WINDOW_MINS and self._premarket_date != today:
-                    await self._pre_market_scan(regime, regime_data, portfolio_value)
-                    self._premarket_date = today
-            logger.info(f"Market closed — regime={regime}, skipping trade entry")
+            # ── Pre-market scan at T-25 min before NSE open ────────────────────────
+            today = now_ist.date()
+            if 0 < mins_to_open <= PRE_MARKET_WINDOW_MINS and self._premarket_date != today:
+                await self._pre_market_scan(regime, regime_data, portfolio_value)
+                self._premarket_date = today
+            logger.info(f"[LOOP] NSE closed — regime={regime}, {mins_to_open:.0f}min to open")
             return
 
-        # ── 5a-ii. Capture start-of-day equity (first open cycle) ────────
+        # ── 5a. Capture start-of-day equity (first open cycle) ──────────────────
         if self._sod_equity <= 0:
             self._sod_equity = float(account.get("last_equity", portfolio_value))
-            logger.info(f"[SOD] Start-of-day equity captured: ${self._sod_equity:,.2f}")
+            logger.info(f"[SOD] Start-of-day equity: ₹{self._sod_equity:,.2f}")
 
-        # ── 5b. EOD force-close check ────────────────────────────────────
-        next_close_str = clock.get("next_close", "")
-        mins_to_close = None
-        if next_close_str:
-            next_close_dt = datetime.fromisoformat(next_close_str.replace("Z", "+00:00"))
-            mins_to_close = (next_close_dt - datetime.now(timezone.utc)).total_seconds() / 60
-
-        if mins_to_close is not None and mins_to_close <= EOD_CLOSE_MINS:
-            positions = await self.alpaca.get_positions()
+        # ── 5b. NSE force squareoff at 15:10 IST ───────────────────────────────
+        if _past_force_sq_time():
+            positions = await self.kite.get_positions()
             if positions:
-                logger.warning(f"[EOD] {mins_to_close:.0f}min to close — force-closing {len(positions)} positions")
-                await self.alpaca.cancel_all_orders()
-                await self.alpaca.close_all_positions()
+                logger.warning(
+                    f"[EOD] 15:10 IST force squareoff — closing {len(positions)} MIS positions"
+                )
+                await self.kite.cancel_all_orders()
+                await self.kite.close_all_positions()
                 for pos in positions:
                     sym = pos.get("symbol", "")
                     await self.db.positions.update_one(
                         {"ticker": sym, "status": "open"},
                         {"$set": {
                             "status": "closed",
-                            "close_reason": "eod_force_close",
+                            "close_reason": "nse_force_squareoff_15:10",
                             "closed_at": datetime.now(timezone.utc).isoformat(),
                         }},
                     )
                 self.broadcast({"type": "eod_close", "count": len(positions), "ts": datetime.now(timezone.utc).isoformat()})
 
-            # ── Daily market comparison (run once per day after EOD close) ──
-            today = datetime.now(timezone.utc).date()
+            # ── Daily market comparison (once per day) ───────────────────────
+            today = now_ist.date()
             if self._eod_compare_date != today:
                 self._eod_compare_date = today
                 try:
-                    eod_account = await self.alpaca.get_account()
+                    eod_account = await self.kite.get_account()
                     end_equity = float(eod_account.get("equity", portfolio_value))
-                    start_eq = self._sod_equity if self._sod_equity > 0 else float(eod_account.get("last_equity", end_equity))
+                    start_eq   = self._sod_equity if self._sod_equity > 0 else end_equity
                     summary = await log_daily_comparison(
                         start_equity=start_eq,
                         end_equity=end_equity,
@@ -164,33 +231,33 @@ class TradingLoop:
                     )
                     await self.db.daily_comparisons.insert_one(summary)
                     self.broadcast({"type": "daily_comparison", **summary})
-                    logger.info(f"[EOD] Daily market comparison logged: MoonshotX={summary.get('portfolio_return_pct')}%")
+                    logger.info(f"[EOD] Comparison logged: MoonshotX-IND={summary.get('portfolio_return_pct')}%")
+                    self._sod_equity = 0.0   # reset for tomorrow
                 except Exception as e:
-                    logger.error(f"[EOD] Daily market comparison failed: {e}")
+                    logger.error(f"[EOD] Daily comparison failed: {e}")
             return
 
         # ── 5c. Manage open positions (trailing stops, partials, stale) ──
         await self.position_mgr.manage_positions(regime)
 
-        # ── 6. Risk check ──────────────────────────────────────────
+        # ── 6. Risk check ──────────────────────────────────────────────────────────
         can_trade, reason = self.risk.can_trade(regime)
         if not can_trade:
-            logger.info(f"Risk block: {reason}")
+            logger.info(f"[LOOP] Risk block: {reason}")
             return
 
         # ── 7. Get open positions + pending orders (prevent duplicate buys) ───
-        open_positions = await self.alpaca.get_positions()
+        open_positions = await self.kite.get_positions()
         open_count = len(open_positions)
         open_tickers = {p.get("symbol", "") for p in open_positions}
-        # Also block tickers with any open/pending buy orders (race condition guard)
-        pending_orders = await self.alpaca.get_orders(status="open")
+        pending_orders = await self.kite.get_orders(status="open")
         for o in pending_orders:
             if o.get("side") == "buy":
                 open_tickers.add(o.get("symbol", ""))
         if pending_orders:
             pending_buys = [o.get("symbol") for o in pending_orders if o.get("side") == "buy"]
             if pending_buys:
-                logger.info(f"Pending buy orders blocking re-entry: {pending_buys}")
+                logger.info(f"[LOOP] Pending buy orders blocking re-entry: {pending_buys}")
 
         # ── 7a. Block new entries near EOD ────────────────────────────────
         if mins_to_close is not None and mins_to_close <= EOD_NO_ENTRY_MINS:
@@ -223,8 +290,7 @@ class TradingLoop:
                 sector_ok, _ = can_add_to_sector(ticker, open_positions, regime)
                 if not sector_ok:
                     continue
-                in_blackout, _ = await is_in_blackout(ticker)
-                if in_blackout:
+                if await block_entry_for_results(ticker):  # India results gate
                     continue
                 executed = await self._execute_entry(entry, open_count, open_positions, portfolio_value, regime)
                 if executed:
@@ -255,17 +321,16 @@ class TradingLoop:
                 continue
             sector_ok, sector_reason = can_add_to_sector(ticker, open_positions, regime)
             if not sector_ok:
-                logger.info(f"Sector block {ticker}: {sector_reason}")
+                logger.info(f"[SCAN] Sector block {ticker}: {sector_reason}")
                 continue
-            in_blackout, blackout_reason = await is_in_blackout(ticker)
-            if in_blackout:
-                logger.info(f"Earnings blackout {ticker}: {blackout_reason}")
+            if await block_entry_for_results(ticker):   # India results gate
+                logger.info(f"[SCAN] Results blackout: {ticker}")
                 continue
             md = await self.scanner.get_ticker_data(ticker)
             if md.get("error"):
                 continue
             md["regime"] = regime
-            md["vix"] = regime_data.get("vix", 20)
+            md["india_vix"] = regime_data.get("india_vix", 16)
             md["fear_greed"] = regime_data.get("fear_greed", 50)
             batch_payload.append({
                 "ticker": ticker,
@@ -325,7 +390,7 @@ class TradingLoop:
                     new_this_loop += 1
 
     async def _execute_entry(self, entry_data: dict, open_count: int, open_positions: list, portfolio_value: float, regime: str) -> bool:
-        """Submit a market order + stop for an approved entry. Returns True if order placed."""
+        """Submit a MIS market order + GTT stop/target for an approved NSE entry."""
         ticker = entry_data["ticker"]
         result = entry_data.get("result", {})
         md = entry_data.get("md", {})
@@ -333,23 +398,21 @@ class TradingLoop:
 
         conviction = result.get("verdict", {}).get("conviction_score", 0.7)
 
-        # ── Re-entry cooldown: don't re-buy stocks we just dumped ──────────
         in_cooldown, cooldown_reason = self.position_mgr.is_in_cooldown(ticker)
         if in_cooldown:
-            logger.info(f"Entry BLOCKED for {ticker}: {cooldown_reason}")
+            logger.info(f"[ENTRY] BLOCKED {ticker}: {cooldown_reason}")
             return False
 
-        # ── Intraday momentum gate: only buy if stock is trending UP now ──
-        confirmed, reason = await confirm_intraday_momentum(self.alpaca, ticker, regime, conviction=conviction)
+        confirmed, reason = await confirm_intraday_momentum(self.kite, ticker, regime, conviction=conviction)
         if not confirmed:
-            logger.info(f"Entry BLOCKED for {ticker}: intraday momentum failed — {reason}")
+            logger.info(f"[ENTRY] BLOCKED {ticker}: momentum failed — {reason}")
             return False
 
         entry_price = float(plan.get("entry_price", md.get("price", 0)))
-        stop_loss = float(plan.get("stop_loss", 0))
+        stop_loss   = float(plan.get("stop_loss", 0))
         take_profit = float(plan.get("take_profit", 0))
 
-        # ── Default stop from ATR if LLM didn't provide one ─────────────────
+        # ── Default stop from ATR if LLM didn't provide one ────────────────────
         if stop_loss <= 0 or stop_loss >= entry_price:
             atr = float(md.get("atr", 0))
             atr_pct = float(md.get("atr_pct", 0))
@@ -358,8 +421,12 @@ class TradingLoop:
             elif atr_pct > 0:
                 stop_loss = round(entry_price * (1 - 2.0 * atr_pct / 100), 2)
             else:
-                stop_loss = round(entry_price * 0.95, 2)   # 5% default
-            logger.info(f"{ticker}: LLM stop missing, using ATR-based default SL=${stop_loss:.2f}")
+                stop_loss = round(entry_price * 0.97, 2)   # 3% default (NSE: tighter)
+            logger.info(f"[ENTRY] {ticker}: ATR-based SL=₹{stop_loss:.2f}")
+
+        if take_profit <= 0 or take_profit <= entry_price:
+            risk = entry_price - stop_loss
+            take_profit = round(entry_price + 2.0 * risk, 2)  # 2:1 RRR default
 
         size = self.risk.calculate_position_size(
             portfolio_value=portfolio_value,
@@ -369,30 +436,33 @@ class TradingLoop:
             confidence=conviction,
         )
         if size <= 0:
-            logger.info(f"Entry BLOCKED for {ticker}: position size 0 (px=${entry_price:.2f}, sl=${stop_loss:.2f}, conv={conviction:.2f})")
+            logger.info(f"[ENTRY] BLOCKED {ticker}: size=0 (px=₹{entry_price:.2f}, sl=₹{stop_loss:.2f})")
             return False
 
-        order = await self.alpaca.submit_market_order(symbol=ticker, qty=size, side="buy")
+        # ── Place MIS market order via Kite ──────────────────────────────────
+        order = await self.kite.submit_market_order(symbol=ticker, qty=size, side="buy")
         if not order.get("id"):
             return False
 
-        # ── Cancel any existing stop orders for this ticker first ────────
-        existing_stops = await self.alpaca.get_orders_for_symbol(ticker, status="open")
-        for old_order in existing_stops:
-            if old_order.get("type") == "stop" and old_order.get("side") == "sell":
-                cancelled = await self.alpaca.cancel_order(old_order["id"])
-                if cancelled:
-                    logger.info(f"{ticker}: cancelled orphan stop order {old_order['id'][:8]}")
-
-        stop_order = {}
-        if stop_loss > 0 and stop_loss < entry_price:
-            stop_order = await self.alpaca.submit_stop_order(symbol=ticker, qty=size, stop_price=stop_loss)
+        # ── Place GTT stop-loss + target (replaces Alpaca bracket order) ───
+        gtt_id = None
+        if hasattr(self.kite, "gtt") and self.kite.gtt:
+            try:
+                gtt_id = await self.kite.gtt.place_oco(
+                    symbol=ticker,
+                    qty=size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                )
+            except Exception as e:
+                logger.warning(f"[ENTRY] GTT placement failed for {ticker}: {e}")
 
         trade_doc = {
             "ticker": ticker,
             "decision_id": result.get("decision_id"),
             "order_id": order.get("id"),
-            "stop_order_id": stop_order.get("id"),
+            "gtt_id": gtt_id,
             "entry_price": entry_price,
             "shares": size,
             "stop_loss": stop_loss,
@@ -400,10 +470,14 @@ class TradingLoop:
             "regime": regime,
             "status": "open",
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "ist_time": _now_ist().strftime("%H:%M IST"),
         }
         await self.db.positions.insert_one(trade_doc)
         self.risk.record_trade(0)
-        logger.info(f"Trade entered: {ticker} x{size} @ ~${entry_price:.2f} (SL=${stop_loss:.2f}, TP=${take_profit:.2f}, conv={conviction:.2f})")
+        logger.info(
+            f"[ENTRY] {ticker} x{size} @ ₹{entry_price:.2f} "
+            f"(SL=₹{stop_loss:.2f}, TP=₹{take_profit:.2f}, conv={conviction:.2f}, gtt={gtt_id})"
+        )
         self.broadcast({
             "type": "trade_executed",
             "ticker": ticker,
@@ -418,12 +492,12 @@ class TradingLoop:
         return True
 
     async def _pre_market_scan(self, regime: str, regime_data: dict, portfolio_value: float):
-        """Run T-25min before open: gather overnight intel, analyze macro, queue best candidates."""
-        logger.info("[PRE-MARKET] ══════════════════════════════════════════════")
-        logger.info("[PRE-MARKET] Morning intelligence brief + candidate scan starting")
+        """Run at 08:55 IST: India morning brief + candidate queue before NSE open."""
+        logger.info("[PRE-MARKET] ════════════════════════════════════════════")
+        logger.info("[PRE-MARKET] India morning brief + NSE candidate scan starting")
         self.broadcast({"type": "premarket_scan_start", "ts": datetime.now(timezone.utc).isoformat()})
         try:
-            open_positions = await self.alpaca.get_positions()
+            open_positions = await self.kite.get_positions()
             open_tickers = {p.get("symbol", "") for p in open_positions}
             open_count = len(open_positions)
             max_pos = self.risk.max_positions(regime, portfolio_value)
@@ -432,22 +506,20 @@ class TradingLoop:
                 logger.info("[PRE-MARKET] No slots available — skipping scan")
                 return
 
-            # ── STEP 1: Morning intelligence brief (1 DEEP LLM call) ─────────
+            # ── STEP 1: India morning intelligence brief (1 DEEP LLM call) ───────
             brief = await run_morning_brief(
-                alpaca=self.alpaca,
+                kite_client=self.kite,
                 pipeline=self.pipeline,
                 regime_data=regime_data,
-                watchlist=BROAD_WATCHLIST,
+                watchlist=list(BROAD_WATCHLIST),
             )
 
-            # Persist brief to DB for frontend display
             if brief:
                 await self.db.morning_briefs.insert_one({
                     **{k: v for k, v in brief.items() if k != "raw_intel"},
                     "raw_intel_summary": {
-                        "futures_count": len(brief.get("raw_intel", {}).get("us_futures", {})),
                         "headlines_count": len(brief.get("raw_intel", {}).get("headlines", [])),
-                        "movers_count": len(brief.get("raw_intel", {}).get("pre_market_movers", [])),
+                        "results_today": len(brief.get("raw_intel", {}).get("results_today", [])),
                     },
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
@@ -484,7 +556,7 @@ class TradingLoop:
             # Remove avoid picks
             all_candidates = [c for c in all_candidates if c not in brief_avoid]
 
-            # ── STEP 3: Pre-filter (no LLM) ──────────────────────────────────
+            # ── STEP 3: Pre-filter (no LLM) ───────────────────────────────────────────────
             batch_payload = []
             for ticker in all_candidates:
                 if ticker in open_tickers:
@@ -492,14 +564,14 @@ class TradingLoop:
                 sector_ok, _ = can_add_to_sector(ticker, open_positions, regime)
                 if not sector_ok:
                     continue
-                in_blackout, _ = await is_in_blackout(ticker)
-                if in_blackout:
+                if await block_entry_for_results(ticker):  # India results gate
+                    logger.info(f"[PRE-MARKET] Results block: {ticker}")
                     continue
                 md = await self.scanner.get_ticker_data(ticker)
                 if md.get("error"):
                     continue
                 md["regime"] = regime
-                md["vix"] = regime_data.get("vix", 20)
+                md["india_vix"] = regime_data.get("india_vix", 16)
                 md["fear_greed"] = regime_data.get("fear_greed", 50)
                 # Tag brief top picks for pipeline awareness
                 md["brief_top_pick"] = ticker in brief_top_picks
@@ -564,12 +636,11 @@ class TradingLoop:
             logger.error(f"[PRE-MARKET] Scan error: {e}")
 
     async def _sync_positions(self):
-        """Sync Alpaca positions with MongoDB."""
-        alpaca_positions = await self.alpaca.get_positions()
-        alpaca_symbols = {p.get("symbol") for p in alpaca_positions}
+        """Sync Kite positions with MongoDB."""
+        kite_positions = await self.kite.get_positions()
+        kite_symbols = {p.get("symbol") for p in kite_positions}
 
-        # Update or close positions in DB
-        for pos in alpaca_positions:
+        for pos in kite_positions:
             symbol = pos.get("symbol")
             unrealized_pl = float(pos.get("unrealized_pl", 0))
             current_price = float(pos.get("current_price", 0))
@@ -584,18 +655,18 @@ class TradingLoop:
                     "shares": qty,
                     "entry_price": avg_entry,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "ist_time": _now_ist().strftime("%H:%M IST"),
                 }},
                 upsert=True,
             )
 
-        # Mark closed positions
         await self.db.positions.update_many(
-            {"ticker": {"$nin": list(alpaca_symbols)}, "status": "open"},
+            {"ticker": {"$nin": list(kite_symbols)}, "status": "open"},
             {"$set": {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()}},
         )
 
         self.broadcast({
             "type": "position_update",
-            "positions": alpaca_positions,
+            "positions": kite_positions,
             "ts": datetime.now(timezone.utc).isoformat(),
         })

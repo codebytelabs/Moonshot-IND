@@ -1,4 +1,19 @@
-"""Universe scanner — self-updating universe with momentum & volume discovery."""
+"""India universe scanner — self-updating NSE universe with momentum & volume discovery.
+
+Data source priority:
+  1. Kite historical API (intraday OHLCV, filled via KiteBroker.get_bars)
+  2. yfinance (NSE suffix .NS) for daily OHLCV fallback
+
+Universe:
+  SEED_UNIVERSE  → India curated large/mid-cap seed (always scanned)
+  BROAD_WATCHLIST → NIFTY200 + select midcap (watchlist scan)
+  NIFTY500       → live NSE constituent list (discovery)
+
+All quality filters adapted for NSE:
+  - Min price: ₹20 (not $5 US)
+  - Min avg daily volume: ₹5Cr (not $10M US)
+  - Pump-and-dump cap: ±25% 5d move (NSE circuit limits help here)
+"""
 import asyncio
 import logging
 from typing import List, Dict, Optional
@@ -9,65 +24,29 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("moonshotx.scanner")
 
-# ── Seed universe: always-included liquid mega-caps (never removed) ───────────
-SEED_UNIVERSE = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AVGO",
-    "AMD", "NFLX", "CRM", "COIN", "PLTR",
-]
+from data.india_universe import INDIA_SEED_UNIVERSE, INDIA_BROAD_WATCHLIST
 
-# ── Broad watchlist: scanned for momentum/volume spikes during discovery ──────
-BROAD_WATCHLIST = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AVGO",
-    "AMD", "QCOM", "INTC", "MU", "AMAT", "LRCX", "MRVL", "ON", "KLAC", "ASML",
-    "CRM", "NOW", "ORCL", "ADBE", "WDAY", "TEAM", "HUBS", "VEEV",
-    "NFLX", "SPOT", "UBER", "ABNB", "DASH", "RBLX",
-    "COIN", "PYPL", "SOFI", "HOOD", "MSTR",
-    "PANW", "CRWD", "DDOG", "NET", "SNOW", "ZS", "FTNT", "S",
-    "PLTR", "SHOP", "SMCI", "ARM", "AI", "PATH", "IONQ",
-    "MRNA", "REGN", "VRTX", "ISRG",
-    "XOM", "CVX", "OXY", "SLB",
-    "GS", "JPM", "MS", "SCHW",
-    "BA", "CAT", "DE", "LMT", "RTX",
-    "ENPH", "FSLR", "CEG", "VST",
-    "LLY", "UNH", "ABBV", "PFE",
-    "V", "MA", "AXP",
-    "COST", "WMT", "TGT", "HD",
-    "DIS", "CMCSA", "T", "TMUS",
-]
+SEED_UNIVERSE = INDIA_SEED_UNIVERSE
+BROAD_WATCHLIST = INDIA_BROAD_WATCHLIST
 
-# ── Quality filters for discovered tickers ────────────────────────────────────
-_MIN_PRICE = 5.0                 # skip penny stocks
-_MIN_AVG_DOLLAR_VOL = 10_000_000 # $10M avg daily dollar volume minimum
-_MAX_MOM_5D = 1.00               # reject >100% 5d moves (pump-and-dump filter)
-_SKIP_SUFFIXES = ("W", "WS", "U", "R", "Z")  # warrants, units, rights
-# ── Known-bad tickers (delisted, no data, yfinance errors) ─────────────────
-_BLOCKED_TICKERS = {
-    "SQ",     # delisted / renamed to XYZ — yfinance returns no data
-    "NVD",    # invalid symbol — 404 on yfinance
-    "FB",     # renamed to META
-}
+# ── NSE-calibrated quality filters ────────────────────────────────────────────
+_MIN_PRICE = 20.0                   # ₹20 minimum (avoids illiquid penny stocks)
+_MIN_AVG_RUPEE_VOL = 5_00_00_000    # ₹5 crore avg daily turnover minimum
+_MAX_MOM_5D = 0.25                  # reject >25% 5d moves (NSE circuit-adj)
+_SKIP_SUFFIXES = ("-RE", "-BE",)   # NSE rights/book entitlements
+# ── Known-bad or illiquid NSE symbols ────────────────────────────────────────
+_BLOCKED_TICKERS = {"NIFTYBEES", "BANKBEES", "JUNIORBEES"}  # ETFs, not stocks
 
-_LEVERAGED_ETFS = {
-    "SOXL", "SOXS", "TQQQ", "SQQQ", "SPXU", "SPXS", "UPRO", "TZA", "TNA",
-    "LABU", "LABD", "FNGU", "FNGD", "TSLL", "TSLS", "SPDN", "UVXY", "SVXY",
-    "NUGT", "DUST", "JNUG", "JDST", "TECL", "TECS", "FAS", "FAZ",
-    "ERX", "ERY", "NAIL", "DRV", "CURE", "DPST", "BITO",
-    "UVIX", "VXX", "VIXY", "SVOL",  # volatility products
-}
 
 def _is_tradeable_ticker(sym: str) -> bool:
-    """Filter out warrants, units, rights, leveraged ETFs, and malformed tickers."""
-    if not sym or len(sym) > 5:
+    """Filter out ETFs, illiquid symbols, and malformed NSE tickers."""
+    if not sym or len(sym) > 20:
         return False
     if sym in _BLOCKED_TICKERS:
         return False
-    if sym in _LEVERAGED_ETFS:
-        return False
     for sfx in _SKIP_SUFFIXES:
-        if sym.endswith(sfx) and len(sym) > len(sfx):
+        if sym.endswith(sfx):
             return False
-    if any(c.isdigit() for c in sym):
-        return False
     return True
 
 # ── Cache & refresh config ────────────────────────────────────────────────────
@@ -77,80 +56,70 @@ _DISCOVERY_CACHE: Dict = {}
 _DISCOVERY_TTL = 900             # universe discovery refresh: 15 min
 
 
-def _fetch_stock_data(ticker: str) -> dict:
+def _fetch_stock_data_nse(ticker: str) -> dict:
+    """Fetch and score one NSE ticker via yfinance (.NS suffix)."""
+    import math
+
+    def _safe(v, default=0.0):
+        return default if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else v
+
     try:
-        t = yf.Ticker(ticker)
+        # Use .NS suffix for NSE on yfinance
+        yf_sym = ticker if ticker.endswith(".NS") else f"{ticker}.NS"
+        t = yf.Ticker(yf_sym)
         hist = t.history(period="1mo", interval="1d")
         if hist is None or len(hist) < 5:
             return {"ticker": ticker, "error": "insufficient data"}
 
         close = hist["Close"]
         volume = hist["Volume"]
+        high = hist["High"]
+        low  = hist["Low"]
 
-        price = float(close.iloc[-1])
+        price = _safe(float(close.iloc[-1]), 0.0)
+        mom_5d  = _safe(float((close.iloc[-1] - close.iloc[-5])  / close.iloc[-5])  if len(close) >= 5  else 0.0)
+        mom_20d = _safe(float((close.iloc[-1] - close.iloc[0])   / close.iloc[0])   if len(close) >= 20 else 0.0)
 
-        mom_5d = float((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5]) if len(close) >= 5 else 0.0
-        mom_20d = float((close.iloc[-1] - close.iloc[0]) / close.iloc[0]) if len(close) >= 20 else 0.0
+        avg_vol   = float(volume.iloc[-20:].mean()) if len(volume) >= 20 else float(volume.mean())
+        vol_ratio = _safe(float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 1.0, 1.0)
 
-        avg_vol = float(volume.iloc[-20:].mean()) if len(volume) >= 20 else float(volume.mean())
-        vol_ratio = float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 1.0
+        delta     = close.diff()
+        gain      = delta.clip(lower=0)
+        loss      = -delta.clip(upper=0)
+        rs        = gain.rolling(14).mean() / (loss.rolling(14).mean() + 1e-9)
+        rsi       = _safe(float(100 - (100 / (1 + rs.iloc[-1]))) if len(close) >= 14 else 50.0, 50.0)
 
-        delta = close.diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(14).mean()
-        avg_loss = loss.rolling(14).mean()
-        rs = avg_gain / (avg_loss + 1e-9)
-        rsi = float(100 - (100 / (1 + rs.iloc[-1]))) if len(close) >= 14 else 50.0
-
-        ema9 = float(close.ewm(span=9).mean().iloc[-1])
-        ema21 = float(close.ewm(span=21).mean().iloc[-1])
+        ema9  = _safe(float(close.ewm(span=9).mean().iloc[-1]))
+        ema21 = _safe(float(close.ewm(span=21).mean().iloc[-1]))
         ema_bullish = ema9 > ema21
 
-        high = hist["High"]
-        low = hist["Low"]
-        tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
-        atr = float(tr.rolling(14).mean().iloc[-1]) if len(tr) >= 14 else float(tr.mean())
-        atr_pct = atr / price if price > 0 else 0.0
+        tr  = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+        atr = _safe(float(tr.rolling(14).mean().iloc[-1]) if len(tr) >= 14 else float(tr.mean()))
+        atr_pct = _safe(atr / price if price > 0 else 0.0)
 
-        gap_pct = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]) if len(close) >= 2 else 0.0
+        gap_pct = _safe(float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]) if len(close) >= 2 else 0.0)
 
-        # Sanitize NaN/Inf
-        import math
-        def _safe(v, default=0.0):
-            return default if (isinstance(v, float) and (math.isnan(v) or math.isinf(v))) else v
-
-        price = _safe(price, 0.0)
-        mom_5d = _safe(mom_5d, 0.0)
-        mom_20d = _safe(mom_20d, 0.0)
-        vol_ratio = _safe(vol_ratio, 1.0)
-        rsi = _safe(rsi, 50.0)
-        atr = _safe(atr, 0.0)
-        atr_pct = _safe(atr_pct, 0.0)
-        gap_pct = _safe(gap_pct, 0.0)
-
+        # ── NSE quality gates ────────────────────────────────────────────
         if price <= 0 or price < _MIN_PRICE:
-            return {"ticker": ticker, "error": f"price ${price:.2f} below minimum ${_MIN_PRICE}"}
+            return {"ticker": ticker, "error": f"price ₹{price:.2f} below ₹{_MIN_PRICE} min"}
 
-        avg_dollar_vol = avg_vol * price
-        if avg_dollar_vol < _MIN_AVG_DOLLAR_VOL:
-            return {"ticker": ticker, "error": f"avg dollar vol ${avg_dollar_vol/1e6:.1f}M below ${_MIN_AVG_DOLLAR_VOL/1e6:.0f}M min"}
+        avg_rupee_vol = avg_vol * price
+        if avg_rupee_vol < _MIN_AVG_RUPEE_VOL:
+            return {"ticker": ticker, "error": f"avg rupee vol ₹{avg_rupee_vol/1e7:.2f}Cr below ₹5Cr min"}
 
         if abs(mom_5d) > _MAX_MOM_5D:
             return {"ticker": ticker, "error": f"5d momentum {mom_5d*100:.0f}% exceeds ±{_MAX_MOM_5D*100:.0f}% cap"}
 
-        rsi_score = 1.0 if 40 <= rsi <= 65 else (0.6 if 35 <= rsi <= 70 else 0.2)
-        vol_score = min(1.0, vol_ratio / 2.0)
-        mom_score = 1.0 if mom_5d > 0.02 else (0.6 if mom_5d > 0.0 else 0.2)
-        # Cap gap contribution to prevent pump-and-dump outliers
+        # ── Scoring (identical structure to original — algo unchanged) ────
+        rsi_score  = 1.0 if 40 <= rsi <= 65 else (0.6 if 35 <= rsi <= 70 else 0.2)
+        vol_score  = min(1.0, vol_ratio / 2.0)
+        mom_score  = 1.0 if mom_5d > 0.02 else (0.6 if mom_5d > 0.0 else 0.2)
         gap_contrib = min(2.0, abs(gap_pct * 10))
         trend_score = 1.0 if ema_bullish else 0.3
-        atr_ok = atr_pct >= 0.005
+        atr_ok     = atr_pct >= 0.003   # ₹20 stock: 0.3% ATR is sufficient
 
         bayesian_score = round(0.3 * rsi_score + 0.25 * vol_score + 0.25 * mom_score + 0.20 * trend_score, 3)
-        composite = round(
-            0.25 * mom_score + 0.25 * vol_score + 0.20 * gap_contrib + 0.30 * rsi_score, 3
-        )
+        composite = round(0.25 * mom_score + 0.25 * vol_score + 0.20 * gap_contrib + 0.30 * rsi_score, 3)
 
         return {
             "ticker": ticker,
@@ -173,51 +142,52 @@ def _fetch_stock_data(ticker: str) -> dict:
         return {"ticker": ticker, "error": str(e), "bayesian_score": 0.0, "composite_score": 0.0}
 
 
-class UniverseScanner:
-    """Self-updating universe scanner.
+_fetch_stock_data = _fetch_stock_data_nse
 
-    Every 15 min it discovers new hot stocks via:
-      1. Alpaca screener — most-active by volume + top gainers
-      2. Broad watchlist momentum scan — volume spike + uptrend filter
-    Then merges with the seed universe for the active scanning pool.
+
+class UniverseScanner:
+    """Self-updating India universe scanner.
+
+    Every 15 min it discovers new hot NSE stocks via:
+      1. KiteBroker.get_most_active() → NSE actives by volume
+      2. KiteBroker.get_top_movers()  → NSE top % gainers
+      3. Broad NIFTY200 watchlist momentum scan — volume spike + uptrend filter
+    Then merges with INDIA_SEED_UNIVERSE for the active scanning pool.
     """
 
-    def __init__(self, alpaca_client=None):
-        self._alpaca = alpaca_client
+    def __init__(self, kite_client=None):
+        self._kite = kite_client
         self._dynamic_universe: List[str] = list(SEED_UNIVERSE)
         self._last_discovery: Optional[datetime] = None
         self._discovery_stats: Dict = {}
 
     async def _discover_universe(self) -> List[str]:
-        """Build the active universe from multiple discovery sources."""
+        """Build the active NSE universe from multiple discovery sources."""
         now = datetime.now(timezone.utc)
 
-        # Check if discovery cache is still fresh
         if self._last_discovery and (now - self._last_discovery).total_seconds() < _DISCOVERY_TTL:
             return self._dynamic_universe
 
-        logger.info("Universe discovery starting...")
+        logger.info("[SCANNER] NSE universe discovery starting...")
         discovered: set = set(SEED_UNIVERSE)
 
-        # ── Source 1: Alpaca screener (real-time most-active + top movers) ─
-        alpaca_actives = []
-        alpaca_movers = []
-        if self._alpaca:
+        # ── Source 1: Kite broker screener (most-active + movers) ────────
+        kite_actives = []
+        kite_movers  = []
+        if self._kite:
             try:
                 raw_actives, raw_movers = await asyncio.gather(
-                    self._alpaca.get_most_active(top=50),
-                    self._alpaca.get_top_movers(top=50),
+                    self._kite.get_most_active(top=50),
+                    self._kite.get_top_movers(top=50),
                 )
-                alpaca_actives = [s for s in raw_actives if _is_tradeable_ticker(s)]
-                alpaca_movers = [s for s in raw_movers if _is_tradeable_ticker(s)]
-                discovered.update(alpaca_actives[:30])
-                discovered.update(alpaca_movers[:20])
+                kite_actives = [s for s in raw_actives if _is_tradeable_ticker(s)]
+                kite_movers  = [s for s in raw_movers  if _is_tradeable_ticker(s)]
+                discovered.update(kite_actives[:30])
+                discovered.update(kite_movers[:20])
             except Exception as e:
-                logger.warning(f"Alpaca screener discovery failed: {e}")
+                logger.warning(f"[SCANNER] Kite screener discovery failed: {e}")
 
-        # ── Source 2: Broad watchlist quick-scan for volume/momentum ───────
-        # Fetch data for all broad watchlist stocks, keep those with
-        # volume_ratio > 1.3 OR positive 5d momentum
+        # ── Source 2: Broad NIFTY200 watchlist volume/momentum scan ──────
         watchlist_hot = await self._quick_scan_watchlist()
         discovered.update(watchlist_hot)
 
@@ -226,15 +196,15 @@ class UniverseScanner:
         self._discovery_stats = {
             "total": len(self._dynamic_universe),
             "from_seed": len(SEED_UNIVERSE),
-            "from_alpaca_active": len(alpaca_actives[:30]),
-            "from_alpaca_movers": len(alpaca_movers[:20]),
+            "from_kite_active": len(kite_actives[:30]),
+            "from_kite_movers": len(kite_movers[:20]),
             "from_watchlist_scan": len(watchlist_hot),
             "updated_at": now.isoformat(),
         }
         logger.info(
-            f"Universe discovery complete: {len(self._dynamic_universe)} stocks "
-            f"(seed={len(SEED_UNIVERSE)}, alpaca_active={len(alpaca_actives[:30])}, "
-            f"movers={len(alpaca_movers[:20])}, watchlist_hot={len(watchlist_hot)})"
+            f"[SCANNER] Discovery complete: {len(self._dynamic_universe)} stocks "
+            f"(seed={len(SEED_UNIVERSE)}, kite_active={len(kite_actives[:30])}, "
+            f"movers={len(kite_movers[:20])}, watchlist_hot={len(watchlist_hot)})"
         )
         return self._dynamic_universe
 

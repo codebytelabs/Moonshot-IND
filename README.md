@@ -1,12 +1,12 @@
-# MoonshotX
+# MoonshotX-IND
 
-> **Autonomous AI-powered intraday momentum trading bot** — built on real-time market intelligence, regime-aware risk management, and a batched LLM pipeline that makes institutional-grade entry/exit decisions at a fraction of the cost.
+> **Autonomous AI-powered intraday momentum trading bot for Indian markets (NSE/BSE)** — built on real-time market intelligence, regime-aware risk management, and a batched LLM pipeline that makes institutional-grade entry/exit decisions at a fraction of the cost.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)](https://reactjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-Motor-47A248?logo=mongodb)](https://www.mongodb.com/)
-[![Alpaca](https://img.shields.io/badge/Alpaca-Trading%20API-FFCD00)](https://alpaca.markets/)
+[![Zerodha](https://img.shields.io/badge/Zerodha-Kite%20Connect-387ED1)](https://kite.trade/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
@@ -34,29 +34,27 @@
 
 ## Overview
 
-MoonshotX is a fully autonomous intraday trading system that:
+MoonshotX-IND is a fully autonomous intraday trading system built for Indian markets (NSE/BSE) that:
 
-1. **Reads the world every morning** — 25 minutes before market open, it gathers US futures, international indices, macro indicators (VIX, gold, oil, USD, yields), overnight news headlines, and pre-market movers.
-2. **Thinks before it acts** — one LLM call produces a structured morning intelligence brief: expected regime, hot sectors, top picks, stocks to avoid, and trading stance (`aggressive` / `normal` / `cautious` / `sit_out`).
-3. **Hunts intraday momentum** — every 5 minutes during market hours, a batched 2-call LLM pipeline screens and deep-analyzes candidates in seconds.
-4. **Protects capital aggressively** — regime-adaptive stop losses (2.5% in fear, 6% in bull), quick-reversal exits, trailing stops, partial profit taking, and a 2-hour re-entry cooldown after losses.
-5. **Closes flat every day** — all positions force-closed by 15:45 EST. No overnight gap risk.
+1. **Reads India every morning** — 25 minutes before NSE open (08:50 IST), it gathers Asia futures, global indices, macro indicators (India VIX, Brent, Gold, USD/INR), FII/DII flow data, and pre-market news.
+2. **Thinks before it acts** — one LLM call produces a structured morning intelligence brief: expected regime, hot sectors, top NSE picks, stocks to avoid, and trading stance (`aggressive` / `normal` / `cautious` / `sit_out`).
+3. **Hunts intraday momentum** — every 5 minutes during NSE hours (09:15–15:30 IST), a batched 2-call LLM pipeline screens and deep-analyzes NIFTY500 candidates in seconds.
+4. **Protects capital aggressively** — regime-adaptive stop losses (2.5% in fear, 6% in bull), NSE circuit breaker gate, GTT-based stops, partial profit taking (₹), and a 2-hour re-entry cooldown.
+5. **Closes flat every day** — all positions force-closed at 15:10 IST via GTT cleanup. No overnight gap risk.
 
 ---
 
 ## Live Performance
 
-Daily returns are auto-logged after every market close and compared against major indices.
+Daily returns are auto-logged after every NSE close and compared against NIFTY50/NIFTY500.
 See **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** for the full history.
 
-| Date | MoonshotX | SPY | QQQ | DIA | Regime |
-|------|-----------|-----|-----|-----|--------|
-| 2026-03-26 | **-0.58%** | -1.79% | -2.39% | -1.04% | fear |
-
-> **Day 1**: Outperformed every major index during a broad selloff. QQQ -2.39%, SMH -4.56%, MoonshotX -0.58%.
+| Date | MoonshotX-IND | NIFTY50 | NIFTY500 | Regime |
+|------|---------------|---------|----------|--------|
+| — | Paper trading | — | — | — |
 
 **System stats (paper trading):**
-- Portfolio: ~$138,000 on Alpaca Paper
+- Portfolio: ~₹5,00,000 (Zerodha Paper / ZERODHA_PAPER_MODE=true)
 - LLM pipeline: 2 calls/loop (down from 252) — **99% cost reduction**
 - Loop cycle: position management every 60s, entry scanning every 5 min
 - LLM cost: ~$0.00134 per scan loop (~$0.40/day)
@@ -71,16 +69,16 @@ See **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** for the full history.
 │                                                                 │
 │  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐  │
 │  │ Regime Mgr   │    │ Morning Brief│    │  Position Manager │  │
-│  │ VIX + F&G    │    │ (T-25 min)   │    │  Trailing stops   │  │
-│  │ → bull/fear/ │    │ Futures+News │    │  Partial profits  │  │
-│  │   choppy     │    │ LLM Macro    │    │  Loss exits       │  │
+│  │ India VIX    │    │ (T-25 min)   │    │  GTT Stops        │  │
+│  │ + FII/DII    │    │ Asia+News    │    │  Partial profits  │  │
+│  │ → bull/fear/ │    │ LLM Macro    │    │  Loss exits       │  │
 │  └──────┬───────┘    └──────┬───────┘    └───────────────────┘  │
 │         │                  │                                     │
 │         ▼                  ▼                                     │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │                  ENTRY PIPELINE (5 min)                 │    │
 │  │                                                         │    │
-│  │  Scanner → Correlation → Earnings → Momentum Gate       │    │
+│  │  Scanner → Correlation → Results Gate → Momentum Gate   │    │
 │  │      ↓                                                  │    │
 │  │  Phase A: QUICK LLM — screen all candidates (1 call)    │    │
 │  │  Phase B: DEEP LLM  — full trade plans (1 call)         │    │
@@ -89,8 +87,8 @@ See **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** for the full history.
 │  └─────────────────────────────────────────────────────────┘    │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │              EOD (15:45 EST)                             │    │
-│  │  Force-close all → Cancel orders → Log daily comparison  │    │
+│  │              EOD (15:10 IST)                             │    │
+│  │  GTT cleanup → Force-close all → Log daily comparison    │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -107,8 +105,8 @@ See **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** for the full history.
 ## Key Features
 
 ### 🧠 Morning Intelligence Brief
-- Pulls **US futures** (ES, NQ, YM, RTY), **international indices** (Nikkei, Hang Seng, DAX, FTSE, ASX), and **macro indicators** (VIX, Gold, Oil, DXY, 10yr yield) in parallel
-- Fetches up to 20 deduplicated headlines from SPY/QQQ/VIX news feeds
+- Pulls **Asia futures** (SGX Nifty, Dow futures), **global indices** (Nikkei, Hang Seng, DAX), and **India macro** (India VIX, Brent, Gold, USD/INR) in parallel
+- Fetches FII/DII flow data from NSE and up to 20 deduplicated headlines from India financial news
 - One DEEP LLM call produces: `expected_regime`, `hot_sectors`, `avoid_sectors`, `top_picks`, `macro_risks`, `trading_stance`
 - `sit_out` stance → zero entries queued for the session
 
@@ -126,21 +124,22 @@ See **[PERFORMANCE_LOG.md](PERFORMANCE_LOG.md)** for the full history.
 
 Max positions scale with **both** portfolio size and regime (log₂-scaled base × regime multiplier):
 
-| Regime | Max Loss | Stale Exit | $50K | $100K | $138K | $250K | $500K+ |
-|--------|----------|------------|------|-------|-------|-------|--------|
-| Bull | 6% | 8 hours | 10 | 14 | 15 | 19 | 20 |
-| Neutral | 4% | 6 hours | 7 | 10 | 11 | 14 | 15 |
-| Fear | 2.5% | 3 hours | 5 | 7 | 7 | 9 | 10 |
-| Choppy | 2.5% | 3 hours | 4 | 5 | 6 | 7 | 8 |
-| Bear Mode | 2% | 2 hours | 2 | 3 | 3 | 4 | 4 |
-| Extreme Fear | 1.5% | 1 hour | 0 | 0 | 0 | 0 | 0 |
+| Regime | Max Loss | Stale Exit | ₹5L | ₹10L | ₹25L | ₹50L+ |
+|--------|----------|------------|-----|------|------|-------|
+| Bull | 6% | 8 hours | 10 | 14 | 19 | 20 |
+| Neutral | 4% | 6 hours | 7 | 10 | 14 | 15 |
+| Fear | 2.5% | 3 hours | 5 | 7 | 9 | 10 |
+| Choppy | 2.5% | 3 hours | 4 | 5 | 7 | 8 |
+| Bear Mode | 2% | 2 hours | 2 | 3 | 4 | 4 |
+| Extreme Fear | 1.5% | 1 hour | 0 | 0 | 0 | 0 |
 
 ### 🚦 Entry Quality Gates (in order)
 1. **Re-entry cooldown** — 2-hour block after any loss exit (persisted to MongoDB, survives restarts)
-2. **Pending order guard** — checks open Alpaca orders to prevent duplicate buys (race condition fix)
-3. **Earnings blackout** — blocks entry 2 days before / 1 day after earnings
-4. **Correlation guard** — regime-dependent sector concentration limits
-5. **Intraday momentum gate** — requires 2/3 up 5-min bars in fear/choppy regimes; checks price vs average, volume, candle color
+2. **Pending order guard** — checks open Kite orders to prevent duplicate buys (race condition fix)
+3. **NSE Results gate** — blocks entry 2 days before / 1 day after quarterly results (BSE calendar)
+4. **NSE Circuit breaker gate** — blocks all trades if NIFTY down -5%/-10%/-15% (SEBI rules)
+5. **Correlation guard** — regime-dependent sector concentration limits
+6. **Intraday momentum gate** — requires 2/3 up 5-min bars in fear/choppy regimes; checks price vs average, volume, candle color
 
 ### 💰 Position Management
 - **Trailing stop**: activates at +3% from entry, trails 2.5% below high watermark
@@ -149,9 +148,10 @@ Max positions scale with **both** portfolio size and regime (log₂-scaled base 
 - **Quick reversal exit**: down ≥1.5% in first 30 minutes → exit immediately
 - **Momentum fade exit**: held ≥45 min AND down ≥1% AND HWM dropped ≥2% → exit
 
-### 🌅 EOD Force-Close
-- **15:30 EST**: no new entries allowed
-- **15:45 EST**: cancel all orders + close all positions → flat overnight, every night
+### 🌅 EOD Force-Close (NSE)
+- **15:00 IST**: no new entries allowed
+- **15:10 IST**: GTT order cleanup + cancel all orders + close all positions via Kite MIS squareoff
+- **15:30 IST**: NSE market close — system flat overnight, every night
 
 ---
 
@@ -161,34 +161,47 @@ Max positions scale with **both** portfolio size and regime (log₂-scaled base 
 |-------|-----------|
 | **Backend** | Python 3.11+, FastAPI, uvicorn, asyncio |
 | **Database** | MongoDB (Motor async driver) |
-| **Broker** | Alpaca Markets (paper + live) |
-| **Market Data** | Alpaca Data API, yfinance |
+| **Broker** | Zerodha Kite Connect (paper + live, NSE/BSE) |
+| **Order Management** | GTT (Good Till Triggered) orders for stop-loss/take-profit |
+| **Market Data** | Kite Historical API, yfinance, NSE India |
 | **LLM** | OpenRouter → Gemini Flash (quick) + Claude Haiku (deep) |
 | **Frontend** | React 18, Recharts, Lucide icons, WebSocket |
-| **Risk** | Custom regime-aware position sizing and stop logic |
+| **Risk** | Custom regime-aware sizing + NSE circuit breaker gate |
 
 ---
 
 ## Project Structure
 
 ```
-MoonshotX/
+MoonshotX-IND/
 ├── backend/
 │   ├── server.py                  # FastAPI app, all API routes, WebSocket
 │   ├── agents/
-│   │   └── pipeline.py            # Batched LLM pipeline (Phase A + B)
+│   │   └── pipeline.py            # Batched LLM pipeline (India-localized prompts)
+│   ├── broker/                    # India broker layer (NEW)
+│   │   ├── kite_session.py        # Zerodha session lifecycle management
+│   │   ├── token_refresh.py       # Auto TOTP token refresh (no Selenium)
+│   │   ├── login_fallback.py      # Manual token injection fallback
+│   │   ├── kite_client.py         # KiteBroker drop-in (mirrors AlpacaClient API)
+│   │   ├── kite_ticker.py         # WebSocket live price streaming
+│   │   └── gtt_manager.py         # GTT stop-loss / take-profit management
+│   ├── data/                      # India data layer (NEW)
+│   │   ├── india_universe.py      # NIFTY500 universe + SEED_UNIVERSE
+│   │   ├── india_market_feed.py   # Kite/yfinance OHLCV + FII/DII data
+│   │   ├── india_macro.py         # India macro aggregator (VIX, FII, USD/INR)
+│   │   ├── india_news_feed.py     # India financial news (ET, Moneycontrol, etc.)
+│   │   └── bse_results_calendar.py # BSE/NSE quarterly results calendar
 │   ├── trading/
-│   │   ├── loop.py                # Main trading loop orchestrator
-│   │   ├── position_manager.py    # Trailing stops, partials, exits
-│   │   ├── morning_brief.py       # Pre-market intelligence gather + LLM
-│   │   ├── market_compare.py      # Daily performance vs index comparison
+│   │   ├── loop.py                # IST-aware trading loop (09:15–15:30 IST)
+│   │   ├── position_manager.py    # GTT stops, partials, ₹ exits
+│   │   ├── morning_brief.py       # India macro + Asia futures + LLM brief
+│   │   ├── results.py             # India quarterly results gate (NEW)
+│   │   ├── market_compare.py      # Daily performance vs NIFTY50/500
 │   │   ├── momentum.py            # Intraday momentum confirmation gate
-│   │   ├── regime.py              # VIX + Fear/Greed regime classifier
-│   │   ├── risk.py                # Position sizing, drawdown limits
-│   │   ├── scanner.py             # Dynamic universe discovery + ranking
-│   │   ├── alpaca_client.py       # Alpaca broker + data API wrapper
-│   │   ├── correlation.py         # Sector concentration guard
-│   │   └── earnings.py            # Earnings calendar blackout
+│   │   ├── regime.py              # India VIX + NIFTY + A/D ratio classifier
+│   │   ├── risk.py                # Position sizing + NSE circuit breaker gate
+│   │   ├── scanner.py             # NIFTY500 universe scanner
+│   │   └── correlation.py         # Sector concentration guard
 │   ├── emergentintegrations/      # LLM chat shim (OpenRouter via requests)
 │   ├── __tests__/                 # Unit + integration tests
 │   └── requirements.txt
@@ -196,17 +209,17 @@ MoonshotX/
 │   └── src/
 │       ├── pages/
 │       │   ├── Dashboard.jsx      # Live P&L, NAV chart, loop status
-│       │   ├── Positions.jsx      # Open positions + management state
+│       │   ├── Positions.jsx      # Open positions + GTT state
 │       │   ├── AgentBrain.jsx     # LLM decision logs + pipeline view
 │       │   ├── Performance.jsx    # Trade history + metrics
-│       │   ├── Universe.jsx       # Scanned universe + rankings
+│       │   ├── Universe.jsx       # NIFTY500 universe rankings
 │       │   └── Settings.jsx       # Bot configuration
 │       ├── components/            # Shared UI components
 │       └── hooks/
 │           └── useWebSocket.js    # Live WebSocket feed
-├── PERFORMANCE_LOG.md             # Auto-generated daily returns vs indices
-├── CHANGELOG.md                   # Version history + all changes
-├── restart_all.sh                 # Kill + restart backend + frontend
+├── PERFORMANCE_LOG.md             # Auto-generated daily returns vs NIFTY
+├── CHANGELOG.md                   # Version history
+├── restart_all.sh
 ├── start_backend.sh
 └── start_frontend.sh
 ```
@@ -219,14 +232,15 @@ MoonshotX/
 - Python 3.11+
 - Node.js 18+
 - MongoDB (local or Atlas)
-- Alpaca Markets account (paper or live)
+- Zerodha account with Kite Connect API subscription (₹2000/month)
 - OpenRouter API key
+- Google Authenticator / TOTP app for 2FA
 
 ### 1. Clone
 
 ```bash
-git clone https://github.com/codebytelabs/MoonshotX.git
-cd MoonshotX
+git clone https://github.com/codebytelabs/MoonshotX-IND.git
+cd MoonshotX-IND
 ```
 
 ### 2. Backend Setup
@@ -247,13 +261,17 @@ npm install
 
 ### 4. Environment Variables
 
-Create `backend/.env`:
+Create `.env` at the project root:
 
 ```env
-# Alpaca
-ALPACA_API_KEY=your_alpaca_key
-ALPACA_SECRET_KEY=your_alpaca_secret
-ALPACA_BASE_URL=https://paper-api.alpaca.markets   # or live URL
+# Zerodha Kite Connect
+Zerodha_KITE_PAID_API_KEY=your_kite_api_key
+Zerodha_KITE_PAID_Secret_KEY=your_kite_secret
+Zerodha_KITE_PAID_ACCESS_TOKEN=your_access_token   # refreshed daily
+ZERODHA_USER_ID=your_zerodha_user_id
+ZERODHA_PASSWORD=your_zerodha_password
+ZERODHA_TOTP_SECRET=your_totp_base32_secret
+ZERODHA_PAPER_MODE=true                             # set false for live trading
 
 # OpenRouter (LLM)
 OPENROUTER_API_KEY=your_openrouter_key
@@ -263,12 +281,14 @@ Openrouter_Quick_Primary_Model=google/gemini-2.5-flash-lite-preview-09-2025
 Openrouter_Research_Primary_Model=anthropic/claude-haiku-4-5
 
 # MongoDB
-MONGODB_URI=mongodb://localhost:27017
-MONGODB_DB=moonshotx
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=moonshotx_ind
 
 # Frontend
 REACT_APP_BACKEND_URL=http://localhost:8001
 ```
+
+> **Token Refresh**: The system auto-refreshes the Kite access token daily at 08:00 IST using `broker/token_refresh.py`. Ensure `ZERODHA_TOTP_SECRET` is set correctly.
 
 ### 5. Run
 
@@ -288,15 +308,15 @@ Open [http://localhost:3000](http://localhost:3000)
 ## Configuration
 
 ### Regime Thresholds (`trading/regime.py`)
-The regime classifier uses VIX and Fear & Greed Index:
+The regime classifier uses **India VIX**, **NIFTY50 return**, and **NSE A/D ratio**:
 
-| Regime | VIX | F&G |
-|--------|-----|-----|
-| `extreme_fear` | >35 | <20 |
-| `fear` | >25 | <35 |
-| `choppy` | >20 | <45 |
-| `neutral` | 15-20 | 45-60 |
-| `bull` | <15 | >60 |
+| Regime | India VIX | NIFTY 20d Return | A/D Ratio |
+|--------|-----------|------------------|-----------|
+| `extreme_fear` | >30 | <-8% | <0.35 |
+| `fear` | >22 | <-3% | <0.45 |
+| `choppy` | >18 | <0% | <0.50 |
+| `neutral` | 13-18 | 0–4% | 0.45-0.60 |
+| `bull` | <13 | >4% | >0.60 |
 
 ### LLM Models (`agents/pipeline.py`)
 Models are loaded from `.env` with fallbacks:
@@ -310,10 +330,12 @@ DEEP_FALLBACK  = "minimax/minimax-m2.7"
 
 ### Key Timing Constants (`trading/loop.py`)
 ```python
-PRE_MARKET_WINDOW_MINS = 25   # run morning brief T-25min before open
+PRE_MARKET_WINDOW_MINS = 25   # run morning brief at 08:50 IST (T-25min)
 ENTRY_SCAN_INTERVAL_MINS = 5  # scan for new entries every 5 min
-EOD_NO_ENTRY_MINS = 30        # no new entries within 30min of close
-EOD_CLOSE_MINS = 15           # force-close all positions 15min before close
+EOD_NO_ENTRY_MINS = 30        # no new entries after 15:00 IST
+EOD_CLOSE_MINS = 20           # GTT cleanup + force-close at 15:10 IST
+MARKET_OPEN_IST  = "09:15"    # NSE equities open
+MARKET_CLOSE_IST = "15:30"    # NSE equities close
 ```
 
 ---
@@ -327,51 +349,56 @@ All endpoints are prefixed with `/api`.
 | `GET` | `/system/status` | Loop status, regime, loop count |
 | `POST` | `/system/start` | Start the trading loop |
 | `POST` | `/system/stop` | Stop the trading loop |
-| `GET` | `/account` | Alpaca account info + portfolio value |
-| `GET` | `/positions` | Open positions with P&L |
+| `POST` | `/system/emergency-halt` | Cancel all orders + GTT cleanup + halt |
+| `GET` | `/account` | Kite account info + portfolio value (₹) |
+| `GET` | `/positions` | Open NSE positions with P&L |
 | `GET` | `/trades` | Closed trade history |
-| `GET` | `/regime` | Current market regime + VIX/F&G |
-| `GET` | `/morning-brief` | Latest pre-market intelligence brief |
-| `GET` | `/universe` | Scanned universe ranked by score |
-| `GET` | `/nav` | Portfolio NAV history (1D/1W/1M) |
+| `GET` | `/regime` | Current market regime + India VIX/FII |
+| `GET` | `/morning-brief` | Latest India pre-market intelligence brief |
+| `GET` | `/universe` | NIFTY500 universe ranked by score |
+| `GET` | `/nav` | Portfolio NAV history (MongoDB snapshots) |
 | `GET` | `/agent-logs` | LLM decision logs |
 | `GET` | `/agent-logs/{id}` | Full detail for a specific decision |
 | `GET` | `/performance` | Win rate, avg gain/loss, Sharpe-like stats |
 | `GET` | `/positions/concentration` | Sector breakdown |
-| `GET` | `/positions/earnings` | Earnings proximity for open positions |
-| `GET` | `/positions/management` | Trailing stop / HWM tracking state |
+| `GET` | `/positions/results-gate` | BSE results blackout for open positions |
+| `GET` | `/positions/management` | GTT / trailing stop / HWM tracking state |
 | `GET` | `/config` | Active model names + cost summary |
+| `GET` | `/kite/session` | **India** — Kite session token validity |
+| `GET` | `/nse/circuit-check` | **India** — NIFTY circuit breaker gate status |
+| `GET` | `/results-calendar` | **India** — Upcoming NSE/BSE quarterly results |
 | `WS` | `/ws` | WebSocket live feed (loop ticks, trades, morning brief) |
 
 ---
 
 ## Trading Logic
 
-### Daily Flow
+### Daily Flow (IST)
 ```
-06:00 EST  Market scans universe, regime updates
-09:05 EST  Morning Brief fires: futures + news + LLM macro analysis
-09:30 EST  Market open → pre-market queue executed (top picks from brief)
-09:30-15:00  Every 60s: position management (exits, trailing stops)
-             Every 5min: new entry scan (scanner → LLM pipeline)
-15:30 EST  No new entries
-15:45 EST  Force-close all positions
-16:00 EST  Market close, flat overnight
+07:30 IST  Token refresh: auto-renew Kite access token (TOTP)
+08:50 IST  Morning Brief fires: Asia futures + India macro + LLM brief
+09:15 IST  NSE market open → pre-market queue executed (top picks from brief)
+09:15–15:00  Every 60s: position management (GTT stops, partials, exits)
+             Every 5min: new entry scan (NIFTY500 scanner → LLM pipeline)
+15:00 IST  No new entries allowed
+15:10 IST  GTT cleanup + force-close all MIS positions
+15:30 IST  NSE market close — flat overnight
 ```
 
 ### Entry Decision Flow
 ```
-Universe Scanner (200+ tickers)
+NIFTY500 Scanner (300+ tickers)
     → Bayesian pre-filter (score ≥ 0.45)
+    → NSE circuit breaker gate (NIFTY % change)
     → Sector concentration check
-    → Earnings blackout check
+    → India results gate (BSE quarterly calendar)
     → Re-entry cooldown check (MongoDB-persisted)
     → Pending order dedup guard
     → Phase A: QUICK LLM screen (all candidates, 1 call)
     → Phase B: DEEP LLM trade plan (shortlist, 1 call)
     → Intraday momentum gate (5-min bars, regime-aware)
-    → Position size (regime × portfolio × ATR-based)
-    → Market order + stop order
+    → Position size (regime × portfolio × ATR-based, min ₹5000)
+    → Kite MIS market order + GTT stop-loss/take-profit
 ```
 
 ---
@@ -409,7 +436,8 @@ pytest tests/ -v
 - **Never commit** `.env` files — they are gitignored
 - All API keys are loaded via `python-dotenv` server-side only
 - React frontend never touches API keys — all calls go through the FastAPI backend
-- Paper trading by default — change `ALPACA_BASE_URL` for live trading
+- Paper trading by default — set `ZERODHA_PAPER_MODE=false` for live trading
+- `ZERODHA_TOTP_SECRET` and `ZERODHA_PASSWORD` are extremely sensitive — never expose them
 - Input sanitization on all API endpoints
 - No secrets in client-side code
 
@@ -440,23 +468,29 @@ See **[CHANGELOG.md](CHANGELOG.md)** for a full history of changes, features, an
 
 ## Roadmap
 
+- [x] Zerodha Kite Connect broker layer (session + GTT + ticker)
+- [x] Auto TOTP token refresh (no Selenium)
+- [x] India macro data layer (VIX, FII/DII, USD/INR, BSE calendar)
+- [x] NIFTY500 universe scanner
+- [x] India regime classifier (India VIX + NIFTY + A/D ratio)
+- [x] NSE circuit breaker gate (SEBI -5/-10/-15% rules)
+- [x] India quarterly results gate (BSE calendar)
+- [x] GTT-based stop-loss / take-profit order management
+- [x] IST-aware trading loop (09:15–15:30 IST)
+- [x] India-localized LLM agent prompts (₹, India VIX, FII/DII)
+- [x] 3 India-specific API endpoints (session, circuit, results calendar)
 - [x] Batched LLM pipeline (99% cost reduction)
-- [x] Morning intelligence brief (pre-market macro analysis)
-- [x] Regime-adaptive position management
-- [x] Daily performance tracking vs indices
-- [ ] Live trading deployment with position limits
-- [ ] Slack/Telegram alerts for entries, exits, morning brief
-- [ ] Options flow data integration (unusual whales)
-- [ ] Multi-account support
-- [ ] Backtesting engine against historical data
-- [ ] Mobile-responsive frontend
+- [ ] Live trading deployment (ZERODHA_PAPER_MODE=false)
+- [ ] Telegram alerts for entries, exits, morning brief
+- [ ] Options flow integration (NSE options OI data)
+- [ ] Backtesting against Kite historical data
 - [ ] Docker / docker-compose deployment
 
 ---
 
 ## Disclaimer
 
-MoonshotX is provided for **educational and research purposes only**. It is not financial advice. Trading stocks involves substantial risk of loss. Past performance (including paper trading results) does not guarantee future results. The authors are not responsible for any financial losses incurred from using this software. Always do your own research and consult a qualified financial advisor before making investment decisions.
+MoonshotX-IND is provided for **educational and research purposes only**. It is not SEBI-registered investment advice. Trading NSE/BSE equities involves substantial risk of loss. Past performance (including paper trading results) does not guarantee future results. The authors are not responsible for any financial losses incurred from using this software. Always do your own research and consult a SEBI-registered investment advisor before making investment decisions.
 
 ---
 

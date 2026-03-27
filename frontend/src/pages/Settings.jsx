@@ -51,7 +51,7 @@ export default function Settings() {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontFamily: 'JetBrains Mono', fontSize: 20, fontWeight: 700, letterSpacing: '0.08em' }}>SYSTEM CONFIGURATION</h1>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-          MoonshotX v1.1 — Configuration reference &nbsp;•&nbsp; Changes require system restart to take effect
+          MoonshotX-IND v1.1 — Configuration reference &nbsp;•&nbsp; Changes require system restart to take effect
         </div>
       </div>
 
@@ -60,8 +60,8 @@ export default function Settings() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
           {[
             { label: 'SYSTEM STATUS', value: status?.is_halted ? 'HALTED' : status?.is_running ? 'RUNNING' : 'IDLE', color: status?.is_running ? 'var(--success)' : status?.is_halted ? 'var(--danger)' : 'var(--text-muted)' },
-            { label: 'BROKER', value: 'Alpaca Paper', color: 'var(--primary)' },
-            { label: 'LLM PROVIDER', value: 'Anthropic Claude', color: 'var(--primary)' },
+            { label: 'BROKER', value: 'Zerodha Kite · NSE', color: 'var(--primary)' },
+            { label: 'LLM PROVIDER', value: 'Ollama / OpenRouter', color: 'var(--primary)' },
             { label: 'ACCOUNT STATUS', value: account?.status?.toUpperCase() || '—', color: account?.status === 'ACTIVE' ? 'var(--success)' : 'var(--text-muted)' },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', padding: '12px 16px' }}>

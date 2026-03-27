@@ -1,4 +1,4 @@
-"""MoonshotX — FastAPI Backend Server."""
+"""MoonshotX-IND — FastAPI Backend Server (India/NSE edition)."""
 import asyncio
 import logging
 import os
@@ -68,7 +68,7 @@ state = TradingState()
 trading_task: Optional[asyncio.Task] = None
 
 # ── Trading Components (lazy init) ────────────────────────────────────────────
-_alpaca = None
+_kite = None
 _pipeline = None
 _regime_mgr = None
 _scanner = None
@@ -77,42 +77,38 @@ _trading_loop = None
 
 
 def get_components():
-    global _alpaca, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
-    if _alpaca is None:
-        from trading.alpaca_client import AlpacaClient
+    global _kite, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
+    if _kite is None:
+        from broker.kite_client import KiteBroker
         from agents.pipeline import AgentPipeline
         from trading.regime import RegimeManager
         from trading.scanner import UniverseScanner
         from trading.risk import RiskManager
         from trading.loop import TradingLoop
 
-        _alpaca = AlpacaClient(
-            api_key=os.environ.get("ALPACA_API_KEY", ""),
-            secret_key=os.environ.get("ALPACA_SECRET_KEY", ""),
-            base_url=os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
-        )
+        _kite = KiteBroker()
         from agents.pipeline import _LLM_API_KEY as _active_llm_key
         _pipeline = AgentPipeline(
             llm_api_key=_active_llm_key,
             broadcast_fn=lambda data: asyncio.create_task(manager.broadcast(data)),
         )
         _regime_mgr = RegimeManager()
-        _scanner = UniverseScanner(alpaca_client=_alpaca)
+        _scanner = UniverseScanner(kite_client=_kite)
         _risk_mgr = RiskManager(db)
         _trading_loop = TradingLoop(
             db=db,
-            alpaca=_alpaca,
+            kite=_kite,
             pipeline=_pipeline,
             regime_manager=_regime_mgr,
             scanner=_scanner,
             risk_manager=_risk_mgr,
             broadcast_fn=lambda data: asyncio.create_task(manager.broadcast(data)),
         )
-    return _alpaca, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
+    return _kite, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="MoonshotX API", version="1.1")
+app = FastAPI(title="MoonshotX-IND API", version="1.1-IND")
 api_router = APIRouter(prefix="/api")
 
 app.add_middleware(
@@ -141,12 +137,12 @@ class AnalyzeRequest(BaseModel):
 
 @api_router.get("/")
 async def root():
-    return {"service": "MoonshotX", "version": "1.1", "status": "online"}
+    return {"service": "MoonshotX-IND", "version": "1.1-IND", "market": "NSE/BSE India", "status": "online"}
 
 
 @api_router.get("/system/status", response_model=SystemStatus)
 async def get_system_status():
-    _, pipeline, _, _, risk_mgr, _ = get_components()
+    _, pipeline, _, _, risk_mgr, _ = get_components()  # type: ignore
     return SystemStatus(
         is_running=state.is_running,
         is_halted=state.is_halted,
@@ -195,13 +191,13 @@ async def emergency_halt():
     if trading_task and not trading_task.done():
         trading_task.cancel()
 
-    alpaca, _, _, _, _, _ = get_components()
+    kite, _, _, _, _, _ = get_components()
     try:
-        await alpaca.cancel_all_orders()
+        await kite.cancel_all_orders()
     except Exception:
         pass
     try:
-        await alpaca.close_all_positions()
+        await kite.close_all_positions()
     except Exception:
         pass
 
@@ -228,33 +224,94 @@ async def reset_system():
     return {"status": "reset"}
 
 
+# ── Kite Auth ─────────────────────────────────────────────────────────────────
+
+@api_router.get("/kite/login-url")
+async def kite_login_url():
+    """
+    Return the Kite Connect login URL.
+
+    Workflow:
+      1. Click the returned `login_url` in your already-logged-in Zerodha browser.
+      2. Kite redirects to the redirect_url configured in your Kite developer app.
+         If that redirect_url is http://localhost:8001/api/kite/callback, the token
+         is saved automatically.
+         Otherwise paste the full callback URL into GET /api/kite/callback?url=<encoded>.
+    """
+    from broker.login_fallback import generate_login_url
+    url = generate_login_url()
+    return {
+        "login_url": url,
+        "instructions": "Click login_url in your logged-in Zerodha browser. "
+                        "After redirect, the server captures the request_token automatically "
+                        "if your Kite app redirect_url points to http://localhost:8001/api/kite/callback",
+    }
+
+
+@api_router.get("/kite/callback")
+async def kite_callback(request_token: str = None, url: str = None, status: str = None):
+    """
+    Zerodha redirects here after browser login with ?request_token=XXX&status=success.
+
+    Also accepts ?url=<full_callback_url> if you need to paste it manually.
+
+    On success: exchanges request_token for access_token, writes to .env, reloads KiteBroker.
+    """
+    from broker.login_fallback import complete_browser_login
+
+    if status and status != "success":
+        raise HTTPException(400, f"Kite login failed with status={status}")
+
+    token_input = request_token or url
+    if not token_input:
+        raise HTTPException(400, "Provide ?request_token=XXX or ?url=<callback_url>")
+
+    try:
+        access_token = await asyncio.to_thread(complete_browser_login, token_input)
+    except Exception as e:
+        logger.error(f"[KITE_CALLBACK] Token exchange failed: {e}")
+        raise HTTPException(500, f"Token exchange failed: {e}")
+
+    # Reset KiteBroker so it reinitializes with fresh api_key + new token from .env
+    global _kite, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
+    _kite = None
+    _pipeline = None
+    _regime_mgr = None
+    _scanner = None
+    _risk_mgr = None
+    _trading_loop = None
+
+    logger.info(f"[KITE_CALLBACK] New access token saved: {access_token[:10]}...")
+    await manager.broadcast({"type": "kite_token_refreshed", "ts": datetime.now(timezone.utc).isoformat()})
+    return {
+        "status": "ok",
+        "message": "Access token saved and active",
+        "token_preview": f"{access_token[:10]}...",
+    }
+
+
 @api_router.get("/account")
 async def get_account():
-    alpaca, _, _, _, _, _ = get_components()
+    kite, _, _, _, _, _ = get_components()
     try:
-        account = await alpaca.get_account()
-        clock = await alpaca.get_clock()
+        account = await kite.get_account()
         return {
-            "portfolio_value": float(account.get("portfolio_value", 0)),
             "equity": float(account.get("equity", 0)),
             "cash": float(account.get("cash", 0)),
             "buying_power": float(account.get("buying_power", 0)),
             "last_equity": float(account.get("last_equity", 0)),
             "daily_pnl": float(account.get("equity", 0)) - float(account.get("last_equity", 0)),
-            "status": account.get("status", "unknown"),
-            "is_market_open": clock.get("is_open", False),
-            "next_open": clock.get("next_open", ""),
-            "next_close": clock.get("next_close", ""),
+            "status": account.get("status", "active"),
         }
     except Exception as e:
-        raise HTTPException(500, f"Alpaca error: {str(e)}")
+        raise HTTPException(500, f"Kite error: {str(e)}")
 
 
 @api_router.get("/positions")
 async def get_positions():
-    alpaca, _, _, _, _, loop = get_components()
+    kite, _, _, _, _, loop = get_components()
     try:
-        positions = await alpaca.get_positions()
+        positions = await kite.get_positions()
 
         # Join with MongoDB to get SL, TP stored at trade entry
         tickers = [p.get("symbol") for p in positions]
@@ -343,8 +400,8 @@ async def get_universe_discovery():
 @api_router.get("/positions/concentration")
 async def get_sector_concentration():
     from trading.correlation import get_concentration_summary
-    alpaca, _, _, _, _, _ = get_components()
-    positions = await alpaca.get_positions()
+    kite, _, _, _, _, _ = get_components()
+    positions = await kite.get_positions()
     _, _, regime_mgr, _, _, _ = get_components()
     regime_data = await regime_mgr.get_current()
     regime = regime_data.get("regime", "neutral")
@@ -355,21 +412,24 @@ async def get_sector_concentration():
     }
 
 
-@api_router.get("/positions/earnings")
-async def get_earnings_check():
-    from trading.earnings import is_in_blackout, get_earnings_date
-    alpaca, _, _, _, _, _ = get_components()
-    positions = await alpaca.get_positions()
+@api_router.get("/positions/results-gate")
+async def get_results_gate_check():
+    """Check India quarterly results gate for all open positions."""
+    from trading.results import IndiaResultsGate
+    kite, _, _, _, _, _ = get_components()
+    positions = await kite.get_positions()
+    gate = IndiaResultsGate()
     results = []
     for pos in positions:
         sym = pos.get("symbol", "")
-        ed = await get_earnings_date(sym)
-        in_bo, reason = await is_in_blackout(sym)
+        blocked, reason = await gate.is_entry_blocked(sym)
+        flag_exit, exit_reason = await gate.should_flag_exit(sym)
         results.append({
             "symbol": sym,
-            "earnings_date": ed.isoformat() if ed else None,
-            "in_blackout": in_bo,
-            "detail": reason,
+            "entry_blocked": blocked,
+            "block_reason": reason,
+            "flag_exit": flag_exit,
+            "exit_reason": exit_reason,
         })
     return results
 
@@ -397,37 +457,16 @@ async def get_position_management():
 
 @api_router.get("/nav")
 async def get_nav_chart(timeframe: str = "1D"):
-    """Return portfolio NAV history.
-    Primary source: Alpaca /v2/account/portfolio/history (live exchange data).
-    Fallback: MongoDB nav_snapshots (only if Alpaca call fails).
+    """Return portfolio NAV history from MongoDB nav_snapshots.
 
-    Timeframe → Alpaca (period, bar_timeframe):
-      5m  → 1D  / 5Min   (last day,   5-min bars)
-      1H  → 1W  / 1H     (last week,  hourly bars)
-      6H  → 1M  / 1D     (last month, daily bars)
-      1D  → 6M  / 1D     (last 6mo,   daily bars)
-      1W  → 1A  / 1D     (last year,  daily bars)
+    Timeframe windows:
+      5m  → last 24 hours
+      1H  → last 7 days
+      6H  → last 30 days
+      1D  → last 180 days
+      1W  → last 365 days
     """
-    alpaca, *_ = get_components()
-
-    # Map UI label → (Alpaca period, Alpaca timeframe)
-    tf_map = {
-        "5m": ("1D",  "5Min"),
-        "1H": ("1W",  "1H"),
-        "6H": ("1M",  "1D"),
-        "1D": ("6M",  "1D"),
-        "1W": ("1A",  "1D"),
-    }
-    alpaca_period, alpaca_tf = tf_map.get(timeframe, ("6M", "1D"))
-
-    # ── Primary: fetch from Alpaca exchange ───────────────────────────────
-    data = await alpaca.get_portfolio_history(period=alpaca_period, timeframe=alpaca_tf)
-
-    if data:
-        return {"timeframe": timeframe, "source": "alpaca", "data": data}
-
-    # ── Fallback: use MongoDB snapshots ───────────────────────────────────
-    logger.warning(f"Alpaca portfolio history unavailable for {timeframe}, falling back to DB")
+    logger.info(f"Fetching NAV history from DB for {timeframe}")
     from datetime import timedelta
     now = datetime.now(timezone.utc)
     window = {"5m": timedelta(hours=24), "1H": timedelta(days=7),
@@ -443,8 +482,8 @@ async def get_nav_chart(timeframe: str = "1D"):
 
 async def _get_account_cached():
     try:
-        alpaca, *_ = get_components()
-        return await alpaca.get_account()
+        kite, *_ = get_components()
+        return await kite.get_account()
     except Exception:
         return {}
 
@@ -489,7 +528,7 @@ async def get_agent_log_detail(decision_id: str):
 
 @api_router.post("/trading/analyze/{ticker}")
 async def manual_analyze(ticker: str, request: AnalyzeRequest):
-    """Manually trigger agent pipeline for a ticker."""
+    """Manually trigger agent pipeline for an NSE ticker."""
     _, pipeline, regime_mgr, scanner, risk_mgr, _ = get_components()
 
     md = await scanner.get_ticker_data(ticker.upper())
@@ -498,13 +537,18 @@ async def manual_analyze(ticker: str, request: AnalyzeRequest):
 
     regime_data = await regime_mgr.get_current()
     regime = request.regime or regime_data.get("regime", "neutral")
-    md.update({"regime": regime, "vix": regime_data.get("vix", 20), "fear_greed": regime_data.get("fear_greed", 50)})
+    md.update({
+        "regime": regime,
+        "india_vix": regime_data.get("india_vix", 16),
+        "fear_greed": regime_data.get("fear_greed", 50),
+        "fii_direction": regime_data.get("fii_direction", "neutral"),
+    })
 
     result = await pipeline.run(
         ticker=ticker.upper(),
         market_data=md,
         regime=regime,
-        portfolio_context={"open_positions": 0, "daily_pnl": risk_mgr.daily_pnl, "regime": regime, "portfolio_value": 50000},
+        portfolio_context={"open_positions": 0, "daily_pnl": risk_mgr.daily_pnl, "regime": regime, "portfolio_value": 500000},
         bayesian_score=md.get("bayesian_score", 0.5),
     )
 
@@ -514,6 +558,55 @@ async def manual_analyze(ticker: str, request: AnalyzeRequest):
         "manual": True,
     })
     return result
+
+
+# ── India-specific endpoints ────────────────────────────────────────────────────
+
+@api_router.get("/kite/session")
+async def get_kite_session():
+    """Check Kite session token validity."""
+    try:
+        from broker.kite_session import KiteSessionManager
+        mgr = KiteSessionManager()
+        valid = mgr.is_valid()
+        return {
+            "valid": valid,
+            "api_key_set": bool(os.environ.get("Zerodha_KITE_PAID_API_KEY")),
+            "token_set": bool(os.environ.get("Zerodha_KITE_PAID_ACCESS_TOKEN")),
+            "paper_mode": os.environ.get("ZERODHA_PAPER_MODE", "true"),
+        }
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+@api_router.get("/nse/circuit-check")
+async def get_circuit_check():
+    """Live NSE circuit breaker gate status (NIFTY % change today)."""
+    try:
+        from data.india_market_feed import get_index_data
+        from trading.risk import circuit_breaker_gate
+        nifty = await asyncio.to_thread(get_index_data, "^NSEI")
+        pct = nifty.get("pct_change", 0.0)
+        blocked, reason = circuit_breaker_gate(pct)
+        return {
+            "nifty_pct_change": round(pct, 3),
+            "circuit_blocked": blocked,
+            "reason": reason,
+            "levels": ["-5% (45min halt)", "-10% (105min halt)", "-15% (rest of day)"],
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@api_router.get("/results-calendar")
+async def get_results_calendar(days_ahead: int = 7):
+    """Upcoming NSE/BSE quarterly results within the next N days."""
+    try:
+        from data.bse_results_calendar import get_upcoming_results
+        results = await asyncio.to_thread(get_upcoming_results, days_ahead)
+        return {"days_ahead": days_ahead, "count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @api_router.get("/performance")
@@ -580,7 +673,7 @@ async def get_morning_brief():
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
-        await websocket.send_json({"type": "connected", "message": "MoonshotX WebSocket connected"})
+        await websocket.send_json({"type": "connected", "message": "MoonshotX-IND WebSocket connected"})
         while True:
             await asyncio.sleep(30)
             await websocket.send_json({"type": "ping"})
@@ -605,7 +698,7 @@ async def startup():
     _, _, _, _, _, trading_loop = get_components()
     state.is_running = True
     trading_task = asyncio.create_task(trading_loop.run(state))
-    logger.info("Startup: trading loop auto-started (will idle until market opens)")
+    logger.info("Startup: trading loop auto-started (will idle until NSE opens at 09:15 IST)")
     await db.system_events.insert_one({"event": "AUTO_START", "ts": datetime.now(timezone.utc).isoformat()})
 
 

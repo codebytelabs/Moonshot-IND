@@ -16,7 +16,7 @@ from typing import Optional
 logger = logging.getLogger("moonshotx.momentum")
 
 
-async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral", conviction: float = 0.7) -> tuple[bool, str]:
+async def confirm_intraday_momentum(kite, symbol: str, regime: str = "neutral", conviction: float = 0.7) -> tuple[bool, str]:
     """Check real-time intraday momentum before entering a position.
 
     Returns (confirmed: bool, reason: str).
@@ -28,7 +28,7 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
     """
     high_conviction = conviction >= 0.80
     try:
-        bars = await alpaca.get_bars(symbol, timeframe="5Min", limit=6)
+        bars = await kite.get_bars(symbol, timeframe="5Min", limit=6)
     except Exception as e:
         logger.warning(f"[MOMENTUM] {symbol}: bars fetch failed: {e}")
         return True, "bars_unavailable"
@@ -77,7 +77,7 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
         min_above_avg = min_above_avg / 2
 
     if pct_above_avg < min_above_avg:
-        return False, f"below_avg: price ${current:.2f} is {pct_above_avg*100:.2f}% vs avg ${avg_close:.2f} (need >{min_above_avg*100:.1f}% in {regime}, conv={conviction:.2f})"
+        return False, f"below_avg: price ₹{current:.2f} is {pct_above_avg*100:.2f}% vs avg ₹{avg_close:.2f} (need >{min_above_avg*100:.1f}% in {regime}, conv={conviction:.2f})"
 
     # ── Check 3: Volume not collapsing ──────────────────────────────────
     if len(volumes) >= 4 and all(v > 0 for v in volumes):
@@ -94,7 +94,7 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
         # Latest bar is a red candle dropping > 0.2%
         # In fear regime, this is a stronger rejection signal
         if regime in ("fear", "choppy", "bear_mode") and not high_conviction:
-            return False, f"red_candle_fear: latest bar O=${latest_open:.2f} C=${latest_close:.2f} (red in {regime})"
+            return False, f"red_candle_fear: latest bar O=₹{latest_open:.2f} C=₹{latest_close:.2f} (red in {regime})"
 
     # ── Check 5: Not at intraday high (avoid buying the top) ────────────
     bar_high = max(float(b.get("h", b.get("high", 0))) for b in bars)
@@ -105,7 +105,7 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
             # Check if it just spiked up (last bar high == 30min high and close near high)
             last_high = float(bars[-1].get("h", bars[-1].get("high", 0)))
             if last_high >= bar_high * 0.999 and current >= last_high * 0.998:
-                return False, f"local_top_fear: at 30min high ${bar_high:.2f} in {regime} — wait for pullback"
+                return False, f"local_top_fear: at 30min high ₹{bar_high:.2f} in {regime} — wait for pullback"
 
     # ── All checks passed ───────────────────────────────────────────────
     trend = "UP" if up_bars >= 2 else "FLAT"

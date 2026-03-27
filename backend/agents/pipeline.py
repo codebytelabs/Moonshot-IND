@@ -1,7 +1,9 @@
 """
-MoonshotX Multi-Agent Trading Pipeline
+MoonshotX-IND Multi-Agent Trading Pipeline — India/NSE Edition
 12 agents: Technical, News, Sentiment, Fundamentals, Bull, Bear,
 Research Manager, Trader, Aggressive, Neutral, Conservative, Portfolio Manager
+
+India localization: all prompts use ₹, NSE, India VIX, FII/DII flows.
 """
 import asyncio
 import json
@@ -139,11 +141,11 @@ class AgentPipeline:
 
     async def technical_analyst(self, ticker: str, md: dict) -> dict:
         self._emit("Technical Analyst", ticker, "running")
-        sys_p = "You are MoonshotX Technical Analyst. You analyze price action and indicators for US equities. Return ONLY valid JSON."
-        user_p = f"""Analyze {ticker} based on this market data and return your technical assessment.
+        sys_p = "You are MoonshotX-IND Technical Analyst. You analyze price action and indicators for NSE India equities. Return ONLY valid JSON."
+        user_p = f"""Analyze {ticker} (NSE) based on this market data and return your technical assessment.
 
 Price Data:
-- Current Price: ${md.get('price', 0):.2f}
+- Current Price: ₹{md.get('price', 0):.2f}
 - 5-day Momentum: {md.get('momentum_5d', 0):.2f}%
 - 20-day Momentum: {md.get('momentum_20d', 0):.2f}%
 
@@ -151,7 +153,8 @@ Indicators:
 - RSI(14): {md.get('rsi', 50):.1f}
 - EMA Trend: {'BULLISH (EMA9 > EMA21)' if md.get('ema_bullish') else 'BEARISH (EMA9 < EMA21)'}
 - Volume Ratio: {md.get('volume_ratio', 1.0):.2f}x average
-- ATR: ${md.get('atr', 0):.2f} ({md.get('atr_pct', 0):.2f}% of price)
+- ATR: ₹{md.get('atr', 0):.2f} ({md.get('atr_pct', 0):.2f}% of price)
+- Avg Rupee Volume: ₹{md.get('avg_rupee_volume', 0)/1e7:.1f} Cr
 
 Respond ONLY with this JSON:
 {{
@@ -168,23 +171,24 @@ Respond ONLY with this JSON:
 
     async def news_analyst(self, ticker: str, md: dict) -> dict:
         self._emit("News Analyst", ticker, "running")
-        sys_p = "You are MoonshotX News Analyst. You assess macro and company-specific news impact. Return ONLY valid JSON."
-        user_p = f"""Assess news and macro context for {ticker}.
+        sys_p = "You are MoonshotX-IND News Analyst. You assess India macro, FII/DII flows, and NSE company-specific news impact. Return ONLY valid JSON."
+        user_p = f"""Assess news and macro context for {ticker} (NSE India).
 
-Stock: {ticker}
-Price: ${md.get('price', 0):.2f}
+Stock: {ticker} (NSE)
+Price: ₹{md.get('price', 0):.2f}
 Recent momentum: {md.get('momentum_5d', 0):.2f}% over 5 days
 
-Consider:
+India macro context:
 - Current market regime: {md.get('regime', 'neutral')}
-- VIX level: {md.get('vix', 20):.1f}
-- Fear & Greed: {md.get('fear_greed', 50):.0f}/100
+- India VIX: {md.get('india_vix', 16):.1f}
+- Fear & Greed Proxy: {md.get('fear_greed', 50):.0f}/100
+- FII/DII flow bias: {md.get('fii_direction', 'neutral')}
 
 Respond ONLY with this JSON:
 {{
   "signal": "BULLISH" or "BEARISH" or "NEUTRAL",
   "confidence": 0.0-1.0,
-  "analysis": "2-sentence assessment of macro/news context",
+  "analysis": "2-sentence assessment of India macro/news context",
   "key_factors": ["factor1", "factor2"],
   "risks": ["risk1"]
 }}"""
@@ -194,19 +198,20 @@ Respond ONLY with this JSON:
 
     async def sentiment_analyst(self, ticker: str, md: dict) -> dict:
         self._emit("Sentiment Analyst", ticker, "running")
-        sys_p = "You are MoonshotX Sentiment Analyst. You assess retail and institutional sentiment signals. Return ONLY valid JSON."
-        user_p = f"""Assess market sentiment for {ticker}.
+        sys_p = "You are MoonshotX-IND Sentiment Analyst. You assess retail and institutional sentiment for NSE India equities, including FII activity and NSE option chain signals. Return ONLY valid JSON."
+        user_p = f"""Assess market sentiment for {ticker} (NSE India).
 
-Stock: {ticker} | Price: ${md.get('price', 0):.2f}
-Volume surge: {md.get('volume_ratio', 1.0):.2f}x
+Stock: {ticker} | Price: ₹{md.get('price', 0):.2f}
+Volume surge: {md.get('volume_ratio', 1.0):.2f}x average
 5d momentum: {md.get('momentum_5d', 0):.2f}%
-Fear & Greed Index: {md.get('fear_greed', 50):.0f}/100
+India Fear & Greed Proxy: {md.get('fear_greed', 50):.0f}/100
+FII direction: {md.get('fii_direction', 'neutral')}
 
 Respond ONLY with this JSON:
 {{
   "signal": "BULLISH" or "BEARISH" or "NEUTRAL",
   "confidence": 0.0-1.0,
-  "analysis": "2-sentence sentiment assessment",
+  "analysis": "2-sentence NSE sentiment assessment",
   "crowd_positioning": "LONG_BIASED" or "SHORT_BIASED" or "NEUTRAL",
   "risks": ["risk1"]
 }}"""
@@ -216,22 +221,23 @@ Respond ONLY with this JSON:
 
     async def fundamentals_analyst(self, ticker: str, md: dict) -> dict:
         self._emit("Fundamentals Analyst", ticker, "running")
-        sys_p = "You are MoonshotX Fundamentals Analyst. You assess valuation and earnings quality. Return ONLY valid JSON."
-        user_p = f"""Assess fundamental backdrop for {ticker} as a short-term trading catalyst.
+        sys_p = "You are MoonshotX-IND Fundamentals Analyst. You assess NSE India company fundamentals, quarterly results, and sector catalysts. Return ONLY valid JSON."
+        user_p = f"""Assess fundamental backdrop for {ticker} (NSE India) as a short-term trading catalyst.
 
-Stock: {ticker} | Price: ${md.get('price', 0):.2f}
+Stock: {ticker} (NSE) | Price: ₹{md.get('price', 0):.2f}
 20d Momentum: {md.get('momentum_20d', 0):.2f}%
 Market regime: {md.get('regime', 'neutral')}
+Results imminent: {md.get('results_imminent', False)}
 
-For short-term trading context, assess:
+For short-term NSE trading context, assess:
 - Is the fundamental backdrop supportive of the current price action?
-- Are there near-term catalysts?
+- Are there near-term India-specific catalysts (quarterly results, RBI policy, sector news)?
 
 Respond ONLY with this JSON:
 {{
   "signal": "BULLISH" or "BEARISH" or "NEUTRAL",
   "confidence": 0.0-1.0,
-  "analysis": "2-sentence fundamental context",
+  "analysis": "2-sentence NSE fundamental context",
   "catalyst": "string or null",
   "risks": ["risk1"]
 }}"""

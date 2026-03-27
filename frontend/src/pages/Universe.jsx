@@ -126,7 +126,7 @@ export default function Universe() {
                         {bayesianOk && <span style={{ marginLeft: 6, fontSize: 8, color: 'var(--success)', fontFamily: 'JetBrains Mono' }}>VIABLE</span>}
                       </div>
                     </td>
-                    <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>${stock.price?.toFixed(2)}</td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'JetBrains Mono', fontSize: 12 }}>₹{stock.price?.toFixed(2)}</td>
                     <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                       <span style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: mom >= 0 ? 'var(--success)' : 'var(--danger)', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
                         {mom >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}

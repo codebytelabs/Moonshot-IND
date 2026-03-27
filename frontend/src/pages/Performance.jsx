@@ -77,7 +77,7 @@ export default function Performance() {
             <MetricCard
               testId="total-pnl-stat"
               label="TOTAL P&L"
-              value={`${perf.total_pnl >= 0 ? '+' : ''}$${perf.total_pnl?.toFixed(2)}`}
+              value={`${perf.total_pnl >= 0 ? '+' : ''}₹${perf.total_pnl?.toFixed(2)}`}
               color={perf.total_pnl >= 0 ? 'var(--success)' : 'var(--danger)'}
             />
             <MetricCard
@@ -90,7 +90,7 @@ export default function Performance() {
             <MetricCard
               testId="avg-win-stat"
               label="AVG WIN / LOSS"
-              value={`$${perf.avg_win?.toFixed(0)} / $${Math.abs(perf.avg_loss)?.toFixed(0)}`}
+              value={`₹${perf.avg_win?.toFixed(0)} / ₹${Math.abs(perf.avg_loss)?.toFixed(0)}`}
               color="var(--text-primary)"
             />
           </div>
@@ -115,7 +115,7 @@ export default function Performance() {
                   <YAxis hide domain={['auto', 'auto']} />
                   <Tooltip
                     contentStyle={{ background: '#0D0D10', border: '1px solid var(--border)', fontFamily: 'JetBrains Mono', fontSize: 11 }}
-                    formatter={(v) => [`$${v?.toLocaleString()}`, 'Portfolio']}
+                    formatter={(v) => [`₹${v?.toLocaleString('en-IN')}`, 'Portfolio']}
                   />
                   <Area type="monotone" dataKey="value" stroke="#00E5FF" fill="url(#eq2)" strokeWidth={1.5} dot={false} />
                 </AreaChart>
@@ -158,8 +158,8 @@ export default function Performance() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 {[
-                  { label: 'AVG WIN', value: `$${perf.avg_win?.toFixed(2)}`, color: 'var(--success)' },
-                  { label: 'AVG LOSS', value: `$${perf.avg_loss?.toFixed(2)}`, color: 'var(--danger)' },
+                  { label: 'AVG WIN', value: `₹${perf.avg_win?.toFixed(2)}`, color: 'var(--success)' },
+                  { label: 'AVG LOSS', value: `₹${perf.avg_loss?.toFixed(2)}`, color: 'var(--danger)' },
                   { label: 'WINS', value: Math.round(perf.win_rate * perf.total_trades), color: 'var(--success)' },
                   { label: 'LOSSES', value: Math.round((1 - perf.win_rate) * perf.total_trades), color: 'var(--danger)' },
                 ].map(({ label, value, color }) => (

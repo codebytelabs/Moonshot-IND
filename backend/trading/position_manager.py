@@ -68,13 +68,13 @@ LOSS_EXIT_REASONS = ("max_loss", "quick_reversal", "momentum_fade")
 
 
 class PositionManager:
-    """Manages open positions: trailing stops, partial exits, stale detection."""
+    """Manages open NSE positions: trailing stops, partial exits, stale detection, GTT cleanup."""
 
-    def __init__(self, alpaca, db, broadcast_fn):
-        self.alpaca = alpaca
+    def __init__(self, kite, db, broadcast_fn):
+        self.kite = kite
         self.db = db
         self.broadcast = broadcast_fn
-        # In-memory tracking: {symbol: {high_watermark, entry_price, entry_time, partials_taken, entry_regime, trailing_active, stop_order_id}}
+        # In-memory tracking: {symbol: {high_watermark, entry_price, entry_time, partials_taken, entry_regime, trailing_active, gtt_id}}
         self._tracking: Dict[str, dict] = {}
         # Cooldown tracking: {symbol: datetime} — persisted to DB so restarts don't wipe them
         self._cooldowns: Dict[str, datetime] = {}
@@ -113,7 +113,7 @@ class PositionManager:
 
     async def manage_positions(self, regime: str):
         """Run every loop cycle — manage all open positions."""
-        positions = await self.alpaca.get_positions()
+        positions = await self.kite.get_positions()
         if not positions:
             return
 
@@ -145,7 +145,7 @@ class PositionManager:
                     "partials_taken": [],
                     "entry_regime": regime,
                     "trailing_active": False,
-                    "stop_order_id": None,
+                    "gtt_id": None,
                     "breakeven_set": False,
                 }
 
@@ -238,53 +238,43 @@ class PositionManager:
         return None
 
     async def _manage_trailing_stop(self, symbol: str, current_price: float, entry_price: float, qty: int, track: dict, pnl_pct: float) -> Optional[dict]:
-        """Activate or update trailing stop."""
+        """Activate or update trailing stop via GTT replacement."""
         if pnl_pct < TRAIL_ACTIVATE_PCT:
             return None
 
         hwm = track["high_watermark"]
         trail_stop = round(hwm * (1 - TRAIL_DISTANCE_PCT), 2)
-
-        # Don't trail below entry (breakeven handles that)
         trail_stop = max(trail_stop, round(entry_price * (1 + BREAKEVEN_BUFFER_PCT), 2))
 
         if not track["trailing_active"]:
-            # First activation — cancel any existing bracket stop, set our trailing stop
             track["trailing_active"] = True
-            await self._cancel_existing_stops(symbol)
-            order = await self.alpaca.submit_stop_order(symbol, qty, trail_stop)
-            if order.get("id"):
-                track["stop_order_id"] = order["id"]
-                logger.info(f"[PM] {symbol}: trailing stop activated @ ${trail_stop:.2f} (hwm=${hwm:.2f}, entry=${entry_price:.2f})")
-                return {"symbol": symbol, "action": "trail_activated", "stop": trail_stop, "hwm": hwm}
+            await self._cancel_gtt(symbol, track)
+            # Place a new GTT stop (no take-profit override — just trailing SL)
+            gtt_id = await self._place_gtt_stop(symbol, qty, trail_stop)
+            track["gtt_id"] = gtt_id
+            logger.info(f"[PM] {symbol}: trailing stop activated @ ₹{trail_stop:.2f} (hwm=₹{hwm:.2f}, gtt={gtt_id})")
+            return {"symbol": symbol, "action": "trail_activated", "stop": trail_stop, "hwm": hwm}
         else:
-            # Update trailing stop if hwm increased (stop should move up)
-            existing_stop_id = track.get("stop_order_id")
-            if existing_stop_id:
-                # Check if we need to move the stop higher
-                # Cancel old, submit new at higher level
-                await self.alpaca.cancel_order(existing_stop_id)
-                order = await self.alpaca.submit_stop_order(symbol, qty, trail_stop)
-                if order.get("id"):
-                    track["stop_order_id"] = order["id"]
-                    logger.info(f"[PM] {symbol}: trailing stop updated @ ${trail_stop:.2f} (hwm=${hwm:.2f})")
-                    return {"symbol": symbol, "action": "trail_updated", "stop": trail_stop, "hwm": hwm}
-        return None
+            # Cancel existing GTT and replace with updated stop
+            await self._cancel_gtt(symbol, track)
+            gtt_id = await self._place_gtt_stop(symbol, qty, trail_stop)
+            track["gtt_id"] = gtt_id
+            logger.info(f"[PM] {symbol}: trailing stop updated @ ₹{trail_stop:.2f} (hwm=₹{hwm:.2f}, gtt={gtt_id})")
+            return {"symbol": symbol, "action": "trail_updated", "stop": trail_stop, "hwm": hwm}
 
     async def _set_breakeven_stop(self, symbol: str, entry_price: float, qty: int, track: dict) -> Optional[dict]:
         """Move stop to breakeven + buffer once position is up enough."""
         if track["trailing_active"]:
-            # Trailing already handles this
             track["breakeven_set"] = True
             return None
 
         be_price = round(entry_price * (1 + BREAKEVEN_BUFFER_PCT), 2)
-        await self._cancel_existing_stops(symbol)
-        order = await self.alpaca.submit_stop_order(symbol, qty, be_price)
-        if order.get("id"):
+        await self._cancel_gtt(symbol, track)
+        gtt_id = await self._place_gtt_stop(symbol, qty, be_price)
+        if gtt_id:
             track["breakeven_set"] = True
-            track["stop_order_id"] = order["id"]
-            logger.info(f"[PM] {symbol}: breakeven stop set @ ${be_price:.2f} (entry=${entry_price:.2f})")
+            track["gtt_id"] = gtt_id
+            logger.info(f"[PM] {symbol}: breakeven stop set @ ₹{be_price:.2f} (entry=₹{entry_price:.2f}, gtt={gtt_id})")
             return {"symbol": symbol, "action": "breakeven_stop", "stop": be_price}
         return None
 
@@ -308,26 +298,21 @@ class PositionManager:
                 taken.append(level)
                 continue
 
-            # Cancel any active stop before partial sell to avoid Alpaca conflicts
-            existing_stop_id = track.get("stop_order_id")
-            if existing_stop_id:
-                await self.alpaca.cancel_order(existing_stop_id)
-                track["stop_order_id"] = None
+            # Cancel GTT before partial sell to avoid conflict
+            await self._cancel_gtt(symbol, track)
 
-            order = await self.alpaca.partial_close(symbol, sell_qty)
-            taken.append(level)  # mark taken regardless — avoid retry spam on 403
+            order = await self.kite.partial_close(symbol, sell_qty)
+            taken.append(level)  # mark taken regardless — avoid retry spam
             if order.get("id"):
                 profit = round((current_price - entry_price) * sell_qty, 2)
-                logger.info(f"[PM] {symbol}: partial profit @ +{level*100:.0f}% — sold {sell_qty} shares (${profit:+.2f})")
-                # Re-submit stop for remaining shares
+                logger.info(f"[PM] {symbol}: partial profit @ +{level*100:.0f}% — sold {sell_qty} shares (₹{profit:+.2f})")
                 remaining = qty - sell_qty
                 if remaining > 0 and track.get("trailing_active"):
                     hwm = track["high_watermark"]
                     new_stop = round(hwm * (1 - TRAIL_DISTANCE_PCT), 2)
                     new_stop = max(new_stop, round(entry_price * (1 + BREAKEVEN_BUFFER_PCT), 2))
-                    new_order = await self.alpaca.submit_stop_order(symbol, remaining, new_stop)
-                    if new_order.get("id"):
-                        track["stop_order_id"] = new_order["id"]
+                    gtt_id = await self._place_gtt_stop(symbol, remaining, new_stop)
+                    track["gtt_id"] = gtt_id
                 return {
                     "symbol": symbol,
                     "action": "partial_profit",
@@ -335,7 +320,6 @@ class PositionManager:
                     "sold_qty": sell_qty,
                     "profit": profit,
                 }
-            # Only one threshold attempt per cycle even on failure
             return None
         return None
 
@@ -348,9 +332,10 @@ class PositionManager:
         return False
 
     async def _close_full_position(self, symbol: str, qty: int, reason: str):
-        """Close entire position and cleanup."""
-        await self._cancel_existing_stops(symbol)
-        await self.alpaca.close_position(symbol)
+        """Close entire position and cleanup GTTs."""
+        track = self._tracking.get(symbol, {})
+        await self._cancel_gtt(symbol, track)
+        await self.kite.close_position(symbol)
         logger.info(f"[PM] {symbol}: full close — reason={reason}")
 
         # Record cooldown for loss exits — prevent immediate re-entry
@@ -381,10 +366,27 @@ class PositionManager:
             }},
         )
 
-    async def _cancel_existing_stops(self, symbol: str):
-        """Cancel all open stop/stop_limit orders for a symbol."""
-        orders = await self.alpaca.get_orders_for_symbol(symbol)
-        for order in orders:
-            otype = order.get("type", "")
-            if otype in ("stop", "stop_limit"):
-                await self.alpaca.cancel_order(order["id"])
+    async def _cancel_gtt(self, symbol: str, track: dict):
+        """Cancel the active GTT for a symbol (before replacing or closing)."""
+        gtt_id = track.get("gtt_id")
+        if not gtt_id:
+            return
+        try:
+            if hasattr(self.kite, "gtt") and self.kite.gtt:
+                await self.kite.gtt.cancel_gtt(gtt_id)
+                logger.info(f"[PM] {symbol}: cancelled GTT {gtt_id}")
+        except Exception as e:
+            logger.warning(f"[PM] {symbol}: GTT cancel failed ({gtt_id}): {e}")
+        track["gtt_id"] = None
+
+    async def _place_gtt_stop(self, symbol: str, qty: int, stop_price: float) -> Optional[str]:
+        """Place a single-leg GTT stop order. Returns gtt_id or None."""
+        try:
+            if hasattr(self.kite, "gtt") and self.kite.gtt:
+                gtt_id = await self.kite.gtt.place_single(
+                    symbol=symbol, qty=qty, trigger_price=stop_price, order_type="MARKET"
+                )
+                return gtt_id
+        except Exception as e:
+            logger.warning(f"[PM] {symbol}: GTT stop placement failed: {e}")
+        return None

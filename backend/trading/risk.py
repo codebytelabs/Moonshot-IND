@@ -1,4 +1,10 @@
-"""Risk management — portfolio-scaled, regime-adaptive position & trade limits."""
+"""Risk management — India/NSE edition.
+
+India-specific additions vs MoonshotX US:
+  • circuit_breaker_gate(): blocks trading when NIFTY hits NSE circuit filter (5%/10%/15%)
+  • min_position_value raised to ₹500 (NSE minimum)
+  • Currency labels updated to ₹
+"""
 import logging
 import math
 from datetime import datetime, timezone, timedelta
@@ -26,17 +32,47 @@ REGIME_PROFILES = {
     "extreme_fear":  {"size_mult": 0.00, "target_pos_pct": 1.00, "regime_pos_mult": 0.00, "max_pos_cap": 0,  "min_pos_floor": 0,  "scan_mult": 0.0, "allow_longs": False, "daily_trade_mult": 0.0, "max_new_per_loop": 0},
 }
 
-# ── Base guardrails (scale with portfolio) ────────────────────────────────────
+# ── India NSE circuit breaker levels ─────────────────────────────────────────────────
+NSE_CIRCUIT_LEVELS = [
+    {"pct": -0.05, "halt_min": 45,  "label": "L1 −5%"},
+    {"pct": -0.10, "halt_min": 105, "label": "L2 −10%"},
+    {"pct": -0.15, "halt_min": None, "label": "L3 −15% (rest of day)"},
+]
+
+# ── Base guardrails (scale with portfolio) ────────────────────────────────────────
 BASE_CONFIG = {
-    "max_daily_loss_pct": 0.03,        # 3% daily stop
+    "max_daily_loss_pct": 0.03,        # 3% daily stop (NSE intraday)
     "max_drawdown_pct": 0.15,          # 15% total drawdown kill switch
     "base_daily_trades": 25,           # base trades/day (scaled by regime)
     "risk_per_trade_pct": 0.012,       # 1.2% risk per trade (base)
     "consecutive_loss_pause": 4,       # pause after N consecutive losses
     "pause_minutes": 20,               # pause duration
-    "min_position_value": 500,         # never open a position smaller than this
+    "min_position_value": 5000,        # never open position < ₹5000 (NSE lot/liquidity floor)
     "bayesian_threshold": 0.45,
 }
+
+
+def circuit_breaker_gate(nifty_pct_change: float) -> tuple:
+    """
+    NSE market-wide circuit breaker gate.
+    Returns (blocked: bool, reason: str).
+
+    SEBI rules:
+      −5% trigger  → 45-min halt (block entries; positions may still close)
+      −10% trigger → 105-min halt
+      −15% trigger → rest of day halt
+    We apply a conservative pre-emptive block at each level.
+    """
+    for level in NSE_CIRCUIT_LEVELS:
+        if nifty_pct_change <= level["pct"]:
+            halt = level["halt_min"]
+            label = level["label"]
+            reason = (
+                f"NSE circuit breaker triggered: {label} — "
+                + (f"trading halted ~{halt}min" if halt else "trading suspended rest of day")
+            )
+            return True, reason
+    return False, "ok"
 
 
 def _get_profile(regime: str) -> dict:
@@ -174,7 +210,7 @@ class RiskManager:
             return 0
 
         shares = int(position_value / entry_price)
-        logger.info(f"Size calc: conv={confidence:.2f} conf_mult={conf_mult}x regime_mult={p['size_mult']}x → ${position_value:,.0f} = {shares} shares @ ${entry_price:.2f}")
+        logger.info(f"Size calc: conv={confidence:.2f} conf_mult={conf_mult}x regime_mult={p['size_mult']}x → ₹{position_value:,.0f} = {shares} shares @ ₹{entry_price:.2f}")
         return max(1, shares)
 
     # ── Recording ─────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import { TrendingUp, TrendingDown, RefreshCw, Target, Shield } from 'lucide-reac
 const API = process.env.REACT_APP_BACKEND_URL + '/api';
 
 function fmt(v, decimals = 2) {
-  return v != null && v !== 0 ? `$${Number(v).toFixed(decimals)}` : '—';
+  return v != null && v !== 0 ? `₹${Number(v).toFixed(decimals)}` : '—';
 }
 
 function PriceLevelRow({ label, price, color, isCurrent, currentPrice }) {
@@ -34,7 +34,7 @@ function PriceLevelRow({ label, price, color, isCurrent, currentPrice }) {
           </span>
         )}
         <span style={{ fontFamily: 'JetBrains Mono', fontSize: 12, color: isCurrent ? '#00E5FF' : (price > 0 ? color : 'var(--text-muted)') }}>
-          {price > 0 ? `$${Number(price).toFixed(2)}` : '—'}
+          {price > 0 ? `₹${Number(price).toFixed(2)}` : '—'}
         </span>
       </div>
     </div>
@@ -67,19 +67,19 @@ function PositionCard({ pos }) {
             }}>{pos.side?.toUpperCase()}</span>
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
-            {pos.qty} shares &nbsp;•&nbsp; Mkt value: ${pos.market_value?.toFixed(2)}
+            {pos.qty} shares &nbsp;•&nbsp; Mkt value: ₹{pos.market_value?.toFixed(2)}
           </div>
         </div>
 
         <div>
           <div style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', letterSpacing: '0.1em', marginBottom: 3 }}>CURRENT</div>
-          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: 'var(--primary)' }}>${pos.current_price?.toFixed(2)}</div>
+          <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: 'var(--primary)' }}>₹{pos.current_price?.toFixed(2)}</div>
         </div>
 
         <div>
           <div style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', letterSpacing: '0.1em', marginBottom: 3 }}>UNREALIZED P&L</div>
           <div style={{ fontFamily: 'JetBrains Mono', fontSize: 15, color: pnlColor }}>
-            {positive ? '+' : ''}${pos.unrealized_pnl?.toFixed(2)}
+            {positive ? '+' : ''}₹{pos.unrealized_pnl?.toFixed(2)}
           </div>
           <div style={{ fontSize: 10, color: pnlColor, opacity: 0.7 }}>
             {pos.unrealized_pnl_pct >= 0 ? '+' : ''}{pos.unrealized_pnl_pct?.toFixed(2)}%
@@ -184,7 +184,7 @@ export default function Positions() {
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', letterSpacing: '0.1em' }}>UNREALIZED P&L</div>
             <div style={{ fontFamily: 'JetBrains Mono', fontSize: 20, color: totalPnl >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-              {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
+              {totalPnl >= 0 ? '+' : ''}₹{totalPnl.toFixed(2)}
             </div>
           </div>
           <button onClick={fetchPositions} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', padding: '6px 10px', cursor: 'pointer' }}>
@@ -197,10 +197,10 @@ export default function Positions() {
       {account && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
           {[
-            { label: 'PORTFOLIO VALUE', value: `$${account.portfolio_value?.toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
-            { label: 'CASH', value: `$${account.cash?.toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
-            { label: 'BUYING POWER', value: `$${account.buying_power?.toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
-            { label: 'DAILY P&L', value: `${account.daily_pnl >= 0 ? '+' : ''}$${account.daily_pnl?.toFixed(2)}`, color: account.daily_pnl >= 0 ? 'var(--success)' : 'var(--danger)' },
+            { label: 'PORTFOLIO VALUE', value: `₹${account.portfolio_value?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { label: 'CASH', value: `₹${account.cash?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { label: 'BUYING POWER', value: `₹${account.buying_power?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` },
+            { label: 'DAILY P&L', value: `${account.daily_pnl >= 0 ? '+' : ''}₹${account.daily_pnl?.toFixed(2)}`, color: account.daily_pnl >= 0 ? 'var(--success)' : 'var(--danger)' },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', padding: '12px 16px' }}>
               <div style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', letterSpacing: '0.15em', marginBottom: 6 }}>{label}</div>
