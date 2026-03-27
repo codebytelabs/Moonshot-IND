@@ -24,7 +24,7 @@ SECTOR_MAP: Dict[str, str] = {
     "ABNB": "consumer", "DASH": "consumer", "RBLX": "consumer",
     "DIS": "consumer", "CMCSA": "consumer",
     # Fintech / crypto
-    "COIN": "fintech", "SQ": "fintech", "PYPL": "fintech",
+    "COIN": "fintech", "PYPL": "fintech",
     "SOFI": "fintech", "HOOD": "fintech", "MSTR": "fintech",
     # Cybersecurity / cloud
     "PANW": "cyber", "CRWD": "cyber", "DDOG": "cyber", "NET": "cyber",

@@ -16,12 +16,17 @@ from typing import Optional
 logger = logging.getLogger("moonshotx.momentum")
 
 
-async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral") -> tuple[bool, str]:
+async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral", conviction: float = 0.7) -> tuple[bool, str]:
     """Check real-time intraday momentum before entering a position.
 
     Returns (confirmed: bool, reason: str).
     If data is unavailable, returns (True, "no_data") to avoid blocking all entries.
+
+    High-conviction picks (>=0.80) get relaxed requirements:
+    - Fear regime only needs 1/2 up bars instead of 2/2
+    - Skips red-candle and local-top checks
     """
+    high_conviction = conviction >= 0.80
     try:
         bars = await alpaca.get_bars(symbol, timeframe="5Min", limit=6)
     except Exception as e:
@@ -45,10 +50,12 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
     down_bars = len(recent) - 1 - up_bars - flat_bars
 
     # In fear/choppy: require CLEAR uptrend (at least 2 of 3 bars up)
+    # High conviction (>=0.80): relax to 1 up bar even in fear
     # In bull/neutral: allow flat (at least 1 up bar)
     if regime in ("fear", "choppy", "bear_mode", "extreme_fear"):
-        if up_bars < 2:
-            return False, f"weak_trend_in_{regime}: only {up_bars}/2 up bars ({[round(c, 2) for c in recent]})"
+        min_up = 1 if high_conviction else 2
+        if up_bars < min_up:
+            return False, f"weak_trend_in_{regime}: only {up_bars}/{min_up} up bars ({[round(c, 2) for c in recent]}) conv={conviction:.2f}"
     else:
         if up_bars == 0:
             return False, f"downtrend: last 3 bars all declining ({[round(c, 2) for c in recent]})"
@@ -65,8 +72,12 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
         "choppy": 0.001, "bear_mode": 0.002, "extreme_fear": 0.005,
     }.get(regime, -0.001)
 
+    # High conviction gets halved threshold
+    if high_conviction:
+        min_above_avg = min_above_avg / 2
+
     if pct_above_avg < min_above_avg:
-        return False, f"below_avg: price ${current:.2f} is {pct_above_avg*100:.2f}% vs avg ${avg_close:.2f} (need >{min_above_avg*100:.1f}% in {regime})"
+        return False, f"below_avg: price ${current:.2f} is {pct_above_avg*100:.2f}% vs avg ${avg_close:.2f} (need >{min_above_avg*100:.1f}% in {regime}, conv={conviction:.2f})"
 
     # ── Check 3: Volume not collapsing ──────────────────────────────────
     if len(volumes) >= 4 and all(v > 0 for v in volumes):
@@ -82,7 +93,7 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
     if latest_open > 0 and latest_close < latest_open * 0.998:
         # Latest bar is a red candle dropping > 0.2%
         # In fear regime, this is a stronger rejection signal
-        if regime in ("fear", "choppy", "bear_mode"):
+        if regime in ("fear", "choppy", "bear_mode") and not high_conviction:
             return False, f"red_candle_fear: latest bar O=${latest_open:.2f} C=${latest_close:.2f} (red in {regime})"
 
     # ── Check 5: Not at intraday high (avoid buying the top) ────────────
@@ -90,7 +101,7 @@ async def confirm_intraday_momentum(alpaca, symbol: str, regime: str = "neutral"
     if bar_high > 0 and current >= bar_high * 0.999:
         # Price is at/near the high of the last 30 min — might be a local top
         # Only block in fear/choppy where reversals are common
-        if regime in ("fear", "choppy"):
+        if regime in ("fear", "choppy") and not high_conviction:
             # Check if it just spiked up (last bar high == 30min high and close near high)
             last_high = float(bars[-1].get("h", bars[-1].get("high", 0)))
             if last_high >= bar_high * 0.999 and current >= last_high * 0.998:

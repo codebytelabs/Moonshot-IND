@@ -21,7 +21,7 @@ BROAD_WATCHLIST = [
     "AMD", "QCOM", "INTC", "MU", "AMAT", "LRCX", "MRVL", "ON", "KLAC", "ASML",
     "CRM", "NOW", "ORCL", "ADBE", "WDAY", "TEAM", "HUBS", "VEEV",
     "NFLX", "SPOT", "UBER", "ABNB", "DASH", "RBLX",
-    "COIN", "SQ", "PYPL", "SOFI", "HOOD", "MSTR",
+    "COIN", "PYPL", "SOFI", "HOOD", "MSTR",
     "PANW", "CRWD", "DDOG", "NET", "SNOW", "ZS", "FTNT", "S",
     "PLTR", "SHOP", "SMCI", "ARM", "AI", "PATH", "IONQ",
     "MRNA", "REGN", "VRTX", "ISRG",
@@ -40,6 +40,13 @@ _MIN_PRICE = 5.0                 # skip penny stocks
 _MIN_AVG_DOLLAR_VOL = 10_000_000 # $10M avg daily dollar volume minimum
 _MAX_MOM_5D = 1.00               # reject >100% 5d moves (pump-and-dump filter)
 _SKIP_SUFFIXES = ("W", "WS", "U", "R", "Z")  # warrants, units, rights
+# ── Known-bad tickers (delisted, no data, yfinance errors) ─────────────────
+_BLOCKED_TICKERS = {
+    "SQ",     # delisted / renamed to XYZ — yfinance returns no data
+    "NVD",    # invalid symbol — 404 on yfinance
+    "FB",     # renamed to META
+}
+
 _LEVERAGED_ETFS = {
     "SOXL", "SOXS", "TQQQ", "SQQQ", "SPXU", "SPXS", "UPRO", "TZA", "TNA",
     "LABU", "LABD", "FNGU", "FNGD", "TSLL", "TSLS", "SPDN", "UVXY", "SVXY",
@@ -51,6 +58,8 @@ _LEVERAGED_ETFS = {
 def _is_tradeable_ticker(sym: str) -> bool:
     """Filter out warrants, units, rights, leveraged ETFs, and malformed tickers."""
     if not sym or len(sym) > 5:
+        return False
+    if sym in _BLOCKED_TICKERS:
         return False
     if sym in _LEVERAGED_ETFS:
         return False

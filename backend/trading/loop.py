@@ -304,6 +304,8 @@ class TradingLoop:
         md = entry_data.get("md", {})
         plan = result.get("plan", {})
 
+        conviction = result.get("verdict", {}).get("conviction_score", 0.7)
+
         # ── Re-entry cooldown: don't re-buy stocks we just dumped ──────────
         in_cooldown, cooldown_reason = self.position_mgr.is_in_cooldown(ticker)
         if in_cooldown:
@@ -311,7 +313,7 @@ class TradingLoop:
             return False
 
         # ── Intraday momentum gate: only buy if stock is trending UP now ──
-        confirmed, reason = await confirm_intraday_momentum(self.alpaca, ticker, regime)
+        confirmed, reason = await confirm_intraday_momentum(self.alpaca, ticker, regime, conviction=conviction)
         if not confirmed:
             logger.info(f"Entry BLOCKED for {ticker}: intraday momentum failed — {reason}")
             return False
@@ -332,7 +334,6 @@ class TradingLoop:
                 stop_loss = round(entry_price * 0.95, 2)   # 5% default
             logger.info(f"{ticker}: LLM stop missing, using ATR-based default SL=${stop_loss:.2f}")
 
-        conviction = result.get("verdict", {}).get("conviction_score", 0.7)
         size = self.risk.calculate_position_size(
             portfolio_value=portfolio_value,
             entry_price=entry_price,
@@ -347,6 +348,14 @@ class TradingLoop:
         order = await self.alpaca.submit_market_order(symbol=ticker, qty=size, side="buy")
         if not order.get("id"):
             return False
+
+        # ── Cancel any existing stop orders for this ticker first ────────
+        existing_stops = await self.alpaca.get_orders_for_symbol(ticker, status="open")
+        for old_order in existing_stops:
+            if old_order.get("type") == "stop" and old_order.get("side") == "sell":
+                cancelled = await self.alpaca.cancel_order(old_order["id"])
+                if cancelled:
+                    logger.info(f"{ticker}: cancelled orphan stop order {old_order['id'][:8]}")
 
         stop_order = {}
         if stop_loss > 0 and stop_loss < entry_price:
