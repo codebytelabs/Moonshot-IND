@@ -66,6 +66,7 @@ class TradingState:
 
 state = TradingState()
 trading_task: Optional[asyncio.Task] = None
+derivatives_task: Optional[asyncio.Task] = None
 
 # ── Trading Components (lazy init) ────────────────────────────────────────────
 _kite = None
@@ -74,10 +75,11 @@ _regime_mgr = None
 _scanner = None
 _risk_mgr = None
 _trading_loop = None
+_deri_loop = None
 
 
 def get_components():
-    global _kite, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
+    global _kite, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop, _deri_loop
     if _kite is None:
         from broker.kite_client import KiteBroker
         from agents.pipeline import AgentPipeline
@@ -85,6 +87,7 @@ def get_components():
         from trading.scanner import UniverseScanner
         from trading.risk import RiskManager
         from trading.loop import TradingLoop
+        from derivatives.deri_loop import DerivativesLoop
 
         _kite = KiteBroker()
         from agents.pipeline import _LLM_API_KEY as _active_llm_key
@@ -104,7 +107,18 @@ def get_components():
             risk_manager=_risk_mgr,
             broadcast_fn=lambda data: asyncio.create_task(manager.broadcast(data)),
         )
+        _deri_loop = DerivativesLoop(
+            db=db,
+            kite=_kite,
+            regime_manager=_regime_mgr,
+            broadcast_fn=lambda data: asyncio.create_task(manager.broadcast(data)),
+        )
     return _kite, _pipeline, _regime_mgr, _scanner, _risk_mgr, _trading_loop
+
+
+def get_deri_loop():
+    get_components()   # ensure initialised
+    return _deri_loop
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -164,9 +178,11 @@ async def start_trading():
         return {"status": "already_running"}
 
     _, _, _, _, _, trading_loop = get_components()
+    deri_loop = get_deri_loop()
     state.is_running = True
     state.started_at = datetime.now(timezone.utc).isoformat()
     trading_task = asyncio.create_task(trading_loop.run(state))
+    derivatives_task = deri_loop.start()
     await manager.broadcast({"type": "system_status", "is_running": True, "is_halted": False})
     await db.system_events.insert_one({"event": "START", "ts": datetime.now(timezone.utc).isoformat()})
     return {"status": "started"}
@@ -174,10 +190,15 @@ async def start_trading():
 
 @api_router.post("/system/stop")
 async def stop_trading():
-    global trading_task
+    global trading_task, derivatives_task
     state.is_running = False
     if trading_task and not trading_task.done():
         trading_task.cancel()
+    deri = get_deri_loop()
+    if deri:
+        deri.stop()
+    if derivatives_task and not derivatives_task.done():
+        derivatives_task.cancel()
     await manager.broadcast({"type": "system_status", "is_running": False, "is_halted": False})
     await db.system_events.insert_one({"event": "STOP", "ts": datetime.now(timezone.utc).isoformat()})
     return {"status": "stopped"}
@@ -200,6 +221,12 @@ async def emergency_halt():
         await kite.close_all_positions()
     except Exception:
         pass
+
+    deri = get_deri_loop()
+    if deri:
+        deri.stop()
+    if derivatives_task and not derivatives_task.done():
+        derivatives_task.cancel()
 
     # Mark all open positions as halted
     await db.positions.update_many(
@@ -560,6 +587,103 @@ async def manual_analyze(ticker: str, request: AnalyzeRequest):
     return result
 
 
+# ── Derivatives endpoints ───────────────────────────────────────────────────────
+
+@api_router.get("/derivatives/status")
+async def get_derivatives_status():
+    """Return derivatives loop status, open strategies, and portfolio Greeks."""
+    deri = get_deri_loop()
+    return deri.get_status()
+
+
+@api_router.get("/derivatives/chain")
+async def get_options_chain(symbol: str = "NIFTY"):
+    """Fetch live options chain from NSE for NIFTY or BANKNIFTY."""
+    try:
+        from derivatives.chain import fetch_chain_nse
+        chain = await fetch_chain_nse(symbol.upper())
+        if chain is None:
+            raise HTTPException(503, f"Could not fetch chain for {symbol}")
+        return {
+            "symbol": chain.symbol,
+            "spot": chain.spot,
+            "atm_strike": chain.atm_strike,
+            "expiry": chain.expiry,
+            "lot_size": chain.lot_size,
+            "pcr": chain.pcr,
+            "strikes_near_atm": chain.strikes_near_atm(6),
+            "calls": [
+                {"strike": l.strike, "ltp": l.ltp, "iv": l.iv, "oi": l.oi,
+                 "volume": l.volume, "bid": l.bid, "ask": l.ask}
+                for l in chain.calls if l.strike in chain.strikes_near_atm(6)
+            ],
+            "puts": [
+                {"strike": l.strike, "ltp": l.ltp, "iv": l.iv, "oi": l.oi,
+                 "volume": l.volume, "bid": l.bid, "ask": l.ask}
+                for l in chain.puts if l.strike in chain.strikes_near_atm(6)
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@api_router.get("/derivatives/expiry")
+async def get_expiry_info(symbol: str = "NIFTY"):
+    """Return current/next weekly expiry info for a symbol."""
+    from derivatives.expiry import current_expiry, next_expiry, days_to_expiry, trading_days_to_expiry
+    cur  = current_expiry(symbol)
+    nxt  = next_expiry(symbol)
+    return {
+        "symbol":           symbol.upper(),
+        "current_expiry":   cur.isoformat(),
+        "next_expiry":      nxt.isoformat(),
+        "dte":              days_to_expiry(symbol),
+        "trading_dte":      trading_days_to_expiry(symbol),
+    }
+
+
+@api_router.get("/derivatives/positions")
+async def get_derivatives_positions(limit: int = 20):
+    """Return recent derivatives positions from MongoDB."""
+    docs = await db.derivatives_positions.find(
+        {}, {"_id": 0}
+    ).sort("ts", -1).limit(limit).to_list(limit)
+    return docs
+
+
+@api_router.get("/derivatives/events")
+async def get_derivatives_events(limit: int = 30):
+    """Return recent derivatives events (entries, exits, blocks)."""
+    docs = await db.derivatives_events.find(
+        {}, {"_id": 0}
+    ).sort("ts", -1).limit(limit).to_list(limit)
+    return docs
+
+
+@api_router.post("/derivatives/start")
+async def start_derivatives():
+    """Manually start the derivatives loop."""
+    global derivatives_task
+    deri = get_deri_loop()
+    if deri.is_running:
+        return {"status": "already_running"}
+    derivatives_task = deri.start()
+    return {"status": "derivatives_started"}
+
+
+@api_router.post("/derivatives/stop")
+async def stop_derivatives():
+    """Stop the derivatives loop (does not close open positions)."""
+    global derivatives_task
+    deri = get_deri_loop()
+    deri.stop()
+    if derivatives_task and not derivatives_task.done():
+        derivatives_task.cancel()
+    return {"status": "derivatives_stopped"}
+
+
 # ── India-specific endpoints ────────────────────────────────────────────────────
 
 @api_router.get("/kite/session")
@@ -691,21 +815,25 @@ async def startup():
     """Auto-start the trading loop when the backend boots.
     The loop handles market-closed gracefully — it just idles until 09:30.
     No manual button press needed."""
-    global trading_task
+    global trading_task, derivatives_task
     if state.is_halted:
         logger.info("Startup: system is halted — not auto-starting loop")
         return
     _, _, _, _, _, trading_loop = get_components()
+    deri_loop = get_deri_loop()
     state.is_running = True
     trading_task = asyncio.create_task(trading_loop.run(state))
-    logger.info("Startup: trading loop auto-started (will idle until NSE opens at 09:15 IST)")
+    derivatives_task = deri_loop.start()
+    logger.info("Startup: equity + derivatives loops auto-started (idle until NSE opens at 09:15 IST)")
     await db.system_events.insert_one({"event": "AUTO_START", "ts": datetime.now(timezone.utc).isoformat()})
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global trading_task
+    global trading_task, derivatives_task
     state.is_running = False
     if trading_task and not trading_task.done():
         trading_task.cancel()
+    if derivatives_task and not derivatives_task.done():
+        derivatives_task.cancel()
     _client.close()

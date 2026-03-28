@@ -385,7 +385,7 @@ export default function Dashboard() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                {['TICKER', 'SIDE', 'QTY', 'ENTRY', 'CURRENT', 'MKT VALUE', 'STOP LOSS', 'TRAIL STOP', 'T1 +5%', 'T2 +10%', 'TAKE PROFIT', 'P&L ($)', 'RETURN'].map(h => (
+                {['TICKER', 'SIDE', 'QTY', 'ENTRY', 'CURRENT', 'MKT VALUE', 'STOP LOSS', 'TRAIL STOP', 'T1 +5%', 'T2 +10%', 'TAKE PROFIT', 'P&L (₹)', 'RETURN'].map(h => (
                   <th key={h} style={{
                     padding: '8px 14px',
                     textAlign: h === 'TICKER' || h === 'SIDE' ? 'left' : 'right',

@@ -4,7 +4,7 @@ import axios from 'axios';
 import { useWebSocket } from '../hooks/useWebSocket';
 import {
   LayoutDashboard, TrendingUp, Brain, BarChart2, List, Settings,
-  Radio, AlertTriangle, Wifi, WifiOff, Activity
+  Radio, AlertTriangle, Wifi, WifiOff, Activity, Zap
 } from 'lucide-react';
 
 const API = process.env.REACT_APP_BACKEND_URL + '/api';
@@ -12,6 +12,7 @@ const API = process.env.REACT_APP_BACKEND_URL + '/api';
 const NAV_ITEMS = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/positions', icon: TrendingUp, label: 'Positions' },
+  { path: '/derivatives', icon: Zap, label: 'Derivatives' },
   { path: '/brain', icon: Brain, label: 'Agent Brain' },
   { path: '/performance', icon: BarChart2, label: 'Performance' },
   { path: '/universe', icon: List, label: 'Universe' },

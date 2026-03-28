@@ -8,6 +8,7 @@ import AgentBrain from './pages/AgentBrain';
 import Performance from './pages/Performance';
 import Universe from './pages/Universe';
 import Settings from './pages/Settings';
+import Derivatives from './pages/Derivatives';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
           <Route path="/brain" element={<AgentBrain />} />
           <Route path="/performance" element={<Performance />} />
           <Route path="/universe" element={<Universe />} />
+          <Route path="/derivatives" element={<Derivatives />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>

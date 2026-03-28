@@ -352,6 +352,45 @@ class KiteBroker:
             logger.error(f"submit_stop_order {symbol} error: {e}")
             return {}
 
+    async def place_option_order(
+        self,
+        symbol: str,       # Kite tradingsymbol e.g. NIFTY27MAR2522500CE
+        side: str,         # "BUY" or "SELL"
+        qty: int,          # number of shares (lot_size × lots)
+        exchange: str = "NFO",
+        product: str = "MIS",
+    ) -> dict:
+        """Place an F&O market order on NFO exchange (paper or live)."""
+        global _PAPER_MODE_COUNTER
+        if self.paper_mode:
+            _PAPER_MODE_COUNTER += 1
+            order_id = f"PAPER_FNO_{_PAPER_MODE_COUNTER:06d}"
+            logger.info(f"[PAPER] F&O order: {symbol} {side.upper()} x{qty} — id={order_id}")
+            return {"id": order_id, "symbol": symbol, "qty": qty, "side": side, "paper": True, "exchange": exchange}
+
+        try:
+            self._ensure_fresh_token()
+            transaction = (
+                self._kite.TRANSACTION_TYPE_BUY
+                if side.upper() == "BUY"
+                else self._kite.TRANSACTION_TYPE_SELL
+            )
+            order_id = await asyncio.to_thread(
+                self._kite.place_order,
+                tradingsymbol=symbol,
+                exchange=exchange,
+                transaction_type=transaction,
+                quantity=qty,
+                order_type=self._kite.ORDER_TYPE_MARKET,
+                product=self._kite.PRODUCT_MIS if product == "MIS" else self._kite.PRODUCT_NRML,
+                variety=self._kite.VARIETY_REGULAR,
+            )
+            logger.info(f"[KITE] F&O order placed: {symbol} {side.upper()} x{qty} — order_id={order_id}")
+            return {"id": str(order_id), "symbol": symbol, "qty": qty, "side": side, "exchange": exchange}
+        except Exception as e:
+            logger.error(f"place_option_order {symbol} error: {e}")
+            return {}
+
     async def cancel_order(self, order_id: str) -> bool:
         if self.paper_mode:
             logger.info(f"[PAPER] Cancel order: {order_id}")
