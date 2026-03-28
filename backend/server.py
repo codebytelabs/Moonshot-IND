@@ -317,11 +317,40 @@ async def kite_callback(request_token: str = None, url: str = None, status: str 
     }
 
 
+def _nse_market_times():
+    """Return is_market_open, next_open (ISO), next_close (ISO) in UTC."""
+    from datetime import timedelta
+    import zoneinfo
+    IST = zoneinfo.ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(IST)
+    today = now_ist.date()
+    open_ist  = datetime(today.year, today.month, today.day, 9, 15, tzinfo=IST)
+    close_ist = datetime(today.year, today.month, today.day, 15, 30, tzinfo=IST)
+    is_open = open_ist <= now_ist < close_ist and now_ist.weekday() < 5
+
+    if is_open:
+        next_open  = (open_ist + timedelta(days=1)).isoformat()
+        next_close = close_ist.isoformat()
+    else:
+        # find next weekday open
+        delta = 1
+        while True:
+            candidate = today + timedelta(days=delta)
+            if candidate.weekday() < 5:
+                break
+            delta += 1
+        next_open  = datetime(candidate.year, candidate.month, candidate.day, 9, 15, tzinfo=IST).isoformat()
+        next_close = datetime(candidate.year, candidate.month, candidate.day, 15, 30, tzinfo=IST).isoformat()
+
+    return is_open, next_open, next_close
+
+
 @api_router.get("/account")
 async def get_account():
     kite, _, _, _, _, _ = get_components()
     try:
         account = await kite.get_account()
+        is_open, next_open, next_close = _nse_market_times()
         return {
             "equity": float(account.get("equity", 0)),
             "cash": float(account.get("cash", 0)),
@@ -329,6 +358,9 @@ async def get_account():
             "last_equity": float(account.get("last_equity", 0)),
             "daily_pnl": float(account.get("equity", 0)) - float(account.get("last_equity", 0)),
             "status": account.get("status", "active"),
+            "is_market_open": is_open,
+            "next_open": next_open,
+            "next_close": next_close,
         }
     except Exception as e:
         raise HTTPException(500, f"Kite error: {str(e)}")
