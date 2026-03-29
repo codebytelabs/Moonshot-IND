@@ -67,6 +67,7 @@ class TradingState:
 state = TradingState()
 trading_task: Optional[asyncio.Task] = None
 derivatives_task: Optional[asyncio.Task] = None
+strategy_task: Optional[asyncio.Task] = None
 
 # ── Trading Components (lazy init) ────────────────────────────────────────────
 _kite = None
@@ -76,6 +77,17 @@ _scanner = None
 _risk_mgr = None
 _trading_loop = None
 _deri_loop = None
+_strategy_loop = None
+
+
+def get_strategy_loop():
+    global _strategy_loop
+    if _strategy_loop is None:
+        from strategies.strategy_loop import StrategyLoop
+        _strategy_loop = StrategyLoop(broadcast_fn=lambda msg: asyncio.get_event_loop().call_soon_threadsafe(
+            asyncio.ensure_future, manager.broadcast(msg)
+        ))
+    return _strategy_loop
 
 
 def get_components():
@@ -183,6 +195,8 @@ async def start_trading():
     state.started_at = datetime.now(timezone.utc).isoformat()
     trading_task = asyncio.create_task(trading_loop.run(state))
     derivatives_task = deri_loop.start()
+    sl = get_strategy_loop()
+    strategy_task = asyncio.create_task(sl.start())
     await manager.broadcast({"type": "system_status", "is_running": True, "is_halted": False})
     await db.system_events.insert_one({"event": "START", "ts": datetime.now(timezone.utc).isoformat()})
     return {"status": "started"}
@@ -190,7 +204,7 @@ async def start_trading():
 
 @api_router.post("/system/stop")
 async def stop_trading():
-    global trading_task, derivatives_task
+    global trading_task, derivatives_task, strategy_task
     state.is_running = False
     if trading_task and not trading_task.done():
         trading_task.cancel()
@@ -199,6 +213,10 @@ async def stop_trading():
         deri.stop()
     if derivatives_task and not derivatives_task.done():
         derivatives_task.cancel()
+    sl = get_strategy_loop()
+    sl.stop()
+    if strategy_task and not strategy_task.done():
+        strategy_task.cancel()
     await manager.broadcast({"type": "system_status", "is_running": False, "is_halted": False})
     await db.system_events.insert_one({"event": "STOP", "ts": datetime.now(timezone.utc).isoformat()})
     return {"status": "stopped"}
@@ -716,6 +734,80 @@ async def stop_derivatives():
     return {"status": "derivatives_stopped"}
 
 
+# ── ZenCurve Strategy endpoints ────────────────────────────────────────────────
+
+@api_router.get("/strategies/status")
+async def get_strategies_status():
+    """Return ZenCurve strategy loop status + portfolio summary."""
+    sl = get_strategy_loop()
+    return sl.status()
+
+
+@api_router.get("/strategies/portfolio")
+async def get_strategies_portfolio():
+    """Return per-strategy virtual capital and P&L breakdown."""
+    sl = get_strategy_loop()
+    return sl.portfolio.summary()
+
+
+@api_router.get("/strategies/events")
+async def get_strategies_events(limit: int = 50):
+    """Return recent strategy loop events."""
+    sl = get_strategy_loop()
+    return sl._events[-limit:]
+
+
+@api_router.post("/strategies/start")
+async def start_strategies():
+    """Manually start the ZenCurve strategy loop."""
+    global strategy_task
+    sl = get_strategy_loop()
+    if sl._running:
+        return {"status": "already_running"}
+    strategy_task = asyncio.create_task(sl.start())
+    return {"status": "started", "sandbox": sl.sandbox}
+
+
+@api_router.post("/strategies/stop")
+async def stop_strategies():
+    """Manually stop the ZenCurve strategy loop."""
+    global strategy_task
+    sl = get_strategy_loop()
+    sl.stop()
+    if strategy_task and not strategy_task.done():
+        strategy_task.cancel()
+    return {"status": "stopped"}
+
+
+@api_router.get("/strategies/backtest")
+async def run_backtest_endpoint(
+    strategy: str = "zenCurve",
+    years: int = 1,
+    capital: float = 50000,
+    lots: int = 1,
+):
+    """Run historical backtest and return metrics. strategy: zen|curvature|zenCurve."""
+    try:
+        from strategies.backtest import run_backtest
+        result = await asyncio.to_thread(
+            run_backtest, strategy, years, capital, lots
+        )
+        return result.report()
+    except Exception as e:
+        raise HTTPException(500, f"Backtest error: {str(e)}")
+
+
+@api_router.get("/strategies/backtest/all")
+async def run_all_backtests_endpoint(years: int = 1, capital: float = 50000, lots: int = 1):
+    """Run all three strategies and return comparative report."""
+    try:
+        from strategies.backtest import run_all_backtests
+        results = await asyncio.to_thread(run_all_backtests, years, capital, lots)
+        return {k: v.report() for k, v in results.items()}
+    except Exception as e:
+        raise HTTPException(500, f"Backtest error: {str(e)}")
+
+
 # ── India-specific endpoints ────────────────────────────────────────────────────
 
 @api_router.get("/kite/session")
@@ -856,16 +948,20 @@ async def startup():
     state.is_running = True
     trading_task = asyncio.create_task(trading_loop.run(state))
     derivatives_task = deri_loop.start()
-    logger.info("Startup: equity + derivatives loops auto-started (idle until NSE opens at 09:15 IST)")
+    sl = get_strategy_loop()
+    strategy_task = asyncio.create_task(sl.start())
+    logger.info("Startup: equity + derivatives + strategy loops auto-started (idle until NSE opens at 09:15 IST)")
     await db.system_events.insert_one({"event": "AUTO_START", "ts": datetime.now(timezone.utc).isoformat()})
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global trading_task, derivatives_task
+    global trading_task, derivatives_task, strategy_task
     state.is_running = False
     if trading_task and not trading_task.done():
         trading_task.cancel()
     if derivatives_task and not derivatives_task.done():
         derivatives_task.cancel()
+    if strategy_task and not strategy_task.done():
+        strategy_task.cancel()
     _client.close()
