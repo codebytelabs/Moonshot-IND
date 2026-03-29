@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/positions', icon: TrendingUp, label: 'Positions' },
   { path: '/derivatives', icon: Zap, label: 'Derivatives' },
+  { path: '/strategies', icon: BarChart2, label: 'Strategy Lab' },
   { path: '/brain', icon: Brain, label: 'Agent Brain' },
   { path: '/performance', icon: BarChart2, label: 'Performance' },
   { path: '/universe', icon: List, label: 'Universe' },

@@ -9,6 +9,7 @@ import Performance from './pages/Performance';
 import Universe from './pages/Universe';
 import Settings from './pages/Settings';
 import Derivatives from './pages/Derivatives';
+import Strategies from './pages/Strategies';
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
           <Route path="/performance" element={<Performance />} />
           <Route path="/universe" element={<Universe />} />
           <Route path="/derivatives" element={<Derivatives />} />
+          <Route path="/strategies" element={<Strategies />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>

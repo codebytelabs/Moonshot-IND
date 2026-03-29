@@ -80,6 +80,15 @@ _trading_loop = None
 _deri_loop = None
 _strategy_loop = None
 _chain_collector = None
+_paper_trader    = None
+
+
+def get_paper_trader():
+    global _paper_trader
+    if _paper_trader is None:
+        from strategies.paper_trader import PaperTradingEngine
+        _paper_trader = PaperTradingEngine(db=db)
+    return _paper_trader
 
 
 def get_strategy_loop():
@@ -834,6 +843,50 @@ async def run_all_backtests_endpoint(years: int = 1, capital: float = 50000, lot
         return {k: v.report() for k, v in results.items()}
     except Exception as e:
         raise HTTPException(500, f"Backtest error: {str(e)}")
+
+
+@api_router.get("/strategies/backtest/compare")
+async def compare_backtest_endpoint(capital: float = 100000, lots: int = 3):
+    """Return aligned equity curves for Momentum / Zen / Curvature (5-min backtest)."""
+    try:
+        from strategies.backtest_5min import run_compare_backtest
+        result = await asyncio.to_thread(run_compare_backtest, capital, lots)
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Compare backtest error: {str(e)}")
+
+
+@api_router.get("/strategies/paper-trading/nav")
+async def get_paper_nav(days: int = 30):
+    """Return saved NAV history for all 3 paper-traded strategies."""
+    pt = get_paper_trader()
+    history = await pt.get_nav_history(days=days)
+    return {"days": days, "count": len(history), "snapshots": history}
+
+
+@api_router.post("/strategies/paper-trading/start")
+async def start_paper_trading():
+    """Start paper trading for Momentum, Zen, Curvature."""
+    pt = get_paper_trader()
+    if pt._running:
+        return {"status": "already_running", "session_id": pt._session_id}
+    await pt.start()
+    return {"status": "started", "session_id": pt._session_id}
+
+
+@api_router.post("/strategies/paper-trading/stop")
+async def stop_paper_trading():
+    """Stop paper trading."""
+    pt = get_paper_trader()
+    pt.stop()
+    return {"status": "stopped", "tick_count": pt._tick_count}
+
+
+@api_router.get("/strategies/paper-trading/status")
+async def paper_trading_status():
+    """Current status and live NAV for each paper-traded strategy."""
+    pt = get_paper_trader()
+    return pt.status()
 
 
 # ── India-specific endpoints ────────────────────────────────────────────────────
