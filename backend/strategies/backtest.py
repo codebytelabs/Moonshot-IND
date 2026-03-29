@@ -275,21 +275,50 @@ def run_backtest(
         curv_proxy = float(np.clip(hv_short / max(hv, 0.01), 0.5, 2.0))
         curv_alpha_val = (np.tanh((curv_proxy - 1.0) * 2) + 1) / 2  # → [0,1]
 
+        # Drifting proxy: GBM band probability using rolling mu/sigma
+        # mu/sigma computed from last 20 bars of daily log-returns
+        log_rets = np.log(df["close"].iloc[max(0,i-20):i+1] / df["close"].iloc[max(0,i-20):i+1].shift(1)).dropna()
+        drift_mu    = float(log_rets.mean() * 252) if len(log_rets) >= 5 else 0.0
+        drift_sigma = max(0.01, float(log_rets.std() * math.sqrt(252)))
+        T_drift = 1.0 / 252.0  # 1 trading day horizon
+        lower_band = spot - SPREAD_WIDTH
+        upper_band = spot + SPREAD_WIDTH
+        log_l = math.log(max(lower_band, 1.0) / spot)
+        log_u = math.log(upper_band / spot)
+        mean_d = (drift_mu - 0.5 * drift_sigma**2) * T_drift
+        std_d  = drift_sigma * math.sqrt(T_drift)
+        from math import erf
+        def _ncdf(x): return 0.5*(1+erf(x/math.sqrt(2)))
+        p_band = max(0.0, min(1.0, _ncdf((log_u-mean_d)/std_d) - _ncdf((log_l-mean_d)/std_d)))
+        drifting_alpha = p_band + 0.30 * (0.5 + 0.5*(drift_mu/max(abs(drift_mu),0.001)))
+        drifting_alpha = min(1.0, max(0.0, drifting_alpha))
+
         if strategy == "zen":
             alpha = rank_val
             composite = alpha
         elif strategy == "curvature":
             alpha = curv_alpha_val
             composite = alpha
+        elif strategy == "drifting":
+            composite = drifting_alpha
         else:  # zenCurve hybrid
             composite = 0.60 * rank_val + 0.40 * curv_alpha_val
 
-        if composite > alpha_bull:
-            direction = "bullish"
-        elif composite < alpha_bear:
-            direction = "bearish"
+        # Drifting direction: only enter when GBM says range-bound, drift sets direction
+        if strategy == "drifting":
+            if p_band > alpha_bull and drift_mu > 0:
+                direction = "bullish"
+            elif p_band > alpha_bull and drift_mu < 0:
+                direction = "bearish"
+            else:
+                continue
         else:
-            continue
+            if composite > alpha_bull:
+                direction = "bullish"
+            elif composite < alpha_bear:
+                direction = "bearish"
+            else:
+                continue
 
         # ── Spread construction ───────────────────────────────────────
         atm = int(round(spot / 50) * 50)
@@ -354,9 +383,9 @@ def run_all_backtests(
     initial_capital: float = 50_000.0,
     lots: int = 1,
 ) -> dict:
-    """Run all three strategies and return comparative report."""
+    """Run all four strategies and return comparative report."""
     results = {}
-    for strat in ["zen", "curvature", "zenCurve"]:
+    for strat in ["zen", "curvature", "zenCurve", "drifting"]:
         r = run_backtest(strategy=strat, years=years,
                          initial_capital=initial_capital, lots=lots)
         results[strat] = r
