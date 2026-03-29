@@ -68,6 +68,7 @@ state = TradingState()
 trading_task: Optional[asyncio.Task] = None
 derivatives_task: Optional[asyncio.Task] = None
 strategy_task: Optional[asyncio.Task] = None
+chain_collector_task: Optional[asyncio.Task] = None
 
 # ── Trading Components (lazy init) ────────────────────────────────────────────
 _kite = None
@@ -78,6 +79,7 @@ _risk_mgr = None
 _trading_loop = None
 _deri_loop = None
 _strategy_loop = None
+_chain_collector = None
 
 
 def get_strategy_loop():
@@ -88,6 +90,18 @@ def get_strategy_loop():
             asyncio.ensure_future, manager.broadcast(msg)
         ))
     return _strategy_loop
+
+
+def get_chain_collector():
+    global _chain_collector
+    if _chain_collector is None:
+        from dhan.client import DhanClient
+        from strategies.chain_collector import ChainCollector
+        _chain_collector = ChainCollector(
+            client=DhanClient(sandbox=os.environ.get("DHAN_SANDBOX", "true").lower() == "true"),
+            db=db,
+        )
+    return _chain_collector
 
 
 def get_components():
@@ -797,9 +811,23 @@ async def run_backtest_endpoint(
         raise HTTPException(500, f"Backtest error: {str(e)}")
 
 
+@api_router.get("/strategies/chain-collector/status")
+async def get_chain_collector_status():
+    """Status of the background option chain snapshot collector."""
+    cc = get_chain_collector()
+    try:
+        count = await db.nifty_chain_snapshots.count_documents({})
+    except Exception:
+        count = 0
+    status = cc.status()
+    status["total_snapshots_stored"] = count
+    status["note"] = "Collector runs only in live mode (DHAN_SANDBOX=false). Snapshots enable proper Curvature/ZenCurve backtesting."
+    return status
+
+
 @api_router.get("/strategies/backtest/all")
 async def run_all_backtests_endpoint(years: int = 1, capital: float = 50000, lots: int = 1):
-    """Run all three strategies and return comparative report."""
+    """Run all four strategies and return comparative report."""
     try:
         from strategies.backtest import run_all_backtests
         results = await asyncio.to_thread(run_all_backtests, years, capital, lots)
@@ -939,7 +967,7 @@ async def startup():
     """Auto-start the trading loop when the backend boots.
     The loop handles market-closed gracefully — it just idles until 09:30.
     No manual button press needed."""
-    global trading_task, derivatives_task
+    global trading_task, derivatives_task, strategy_task, chain_collector_task
     if state.is_halted:
         logger.info("Startup: system is halted — not auto-starting loop")
         return
@@ -950,13 +978,18 @@ async def startup():
     derivatives_task = deri_loop.start()
     sl = get_strategy_loop()
     strategy_task = asyncio.create_task(sl.start())
+    # Start chain collector only in live mode (sandbox has no chain data)
+    if os.environ.get("DHAN_SANDBOX", "true").lower() != "true":
+        cc = get_chain_collector()
+        chain_collector_task = asyncio.create_task(cc.start())
+        logger.info("Startup: chain collector auto-started (live mode)")
     logger.info("Startup: equity + derivatives + strategy loops auto-started (idle until NSE opens at 09:15 IST)")
     await db.system_events.insert_one({"event": "AUTO_START", "ts": datetime.now(timezone.utc).isoformat()})
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global trading_task, derivatives_task, strategy_task
+    global trading_task, derivatives_task, strategy_task, chain_collector_task
     state.is_running = False
     if trading_task and not trading_task.done():
         trading_task.cancel()
@@ -964,4 +997,6 @@ async def shutdown():
         derivatives_task.cancel()
     if strategy_task and not strategy_task.done():
         strategy_task.cancel()
+    if chain_collector_task and not chain_collector_task.done():
+        chain_collector_task.cancel()
     _client.close()
