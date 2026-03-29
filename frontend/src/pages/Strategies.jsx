@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -188,9 +188,23 @@ export default function Strategies() {
     }
   }, [tab, fetchPtStatus, fetchNavHistory]);
 
+  // ── Chart range filter ─────────────────────────────────────────────────────
+  const [btRange, setBtRange] = useState('ALL');
+
   // ── Derived backtest chart data ───────────────────────────────────────────
   const btSeries = btData?.series ?? [];
   const btSummary = btData?.summary ?? {};
+
+  const filteredSeries = useMemo(() => {
+    if (!btSeries.length || btRange === 'ALL') return btSeries;
+    const lastDate = btSeries[btSeries.length - 1]?.date;
+    if (!lastDate) return btSeries;
+    const cutoff = new Date(lastDate);
+    if (btRange === '1W') cutoff.setDate(cutoff.getDate() - 7);
+    if (btRange === '1M') cutoff.setDate(cutoff.getDate() - 30);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    return btSeries.filter(d => d.date >= cutoffStr);
+  }, [btSeries, btRange]);
 
   // ── UI ────────────────────────────────────────────────────────────────────
   const tabStyle = (t) => ({
@@ -290,17 +304,30 @@ export default function Strategies() {
             <>
               {/* Equity curve chart */}
               <div style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid #1E293B', borderRadius: 12, padding: '20px 16px', marginBottom: 24 }}>
-                <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: '#94A3B8', letterSpacing: '0.08em', marginBottom: 16 }}>
-                  EQUITY CURVE — NAV vs Date (₹1,00,000 starting capital)
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <span style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: '#94A3B8', letterSpacing: '0.08em' }}>
+                    EQUITY CURVE — NAV (₹1,00,000 start · {btData?.summary?.zen?.sample_trading_days ?? 0} trading days · annualised ×{(252 / (btData?.summary?.zen?.sample_trading_days ?? 56)).toFixed(1)})
+                  </span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {['1W', '1M', 'ALL'].map(r => (
+                      <button key={r} onClick={() => setBtRange(r)} style={{
+                        padding: '3px 10px', fontFamily: 'JetBrains Mono', fontSize: 10,
+                        background: btRange === r ? 'rgba(0,229,255,0.1)' : 'transparent',
+                        border: `1px solid ${btRange === r ? '#00E5FF' : '#334155'}`,
+                        color: btRange === r ? '#00E5FF' : '#64748B',
+                        borderRadius: 3, cursor: 'pointer',
+                      }}>{r}</button>
+                    ))}
+                  </div>
                 </div>
                 <ResponsiveContainer width="100%" height={320}>
-                  <LineChart data={btSeries} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
+                  <LineChart data={filteredSeries} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" />
                     <XAxis
                       dataKey="date"
                       tick={{ fill: '#64748B', fontSize: 10, fontFamily: 'JetBrains Mono' }}
                       tickLine={false}
-                      interval={Math.floor(btSeries.length / 6)}
+                      interval={Math.max(0, Math.floor(filteredSeries.length / 6))}
                     />
                     <YAxis
                       tick={{ fill: '#64748B', fontSize: 10, fontFamily: 'JetBrains Mono' }}
@@ -352,7 +379,8 @@ export default function Strategies() {
                           ['Ann. ROC',    `${s.annualised_roc_pct ?? 0}%`,              (s.annualised_roc_pct ?? 0) > 0],
                           ['Ann. P&L',    fmtRs(s.annualised_pnl_1L),                  (s.annualised_pnl_1L ?? 0) > 0],
                           ['Win Rate',    `${s.win_rate_pct ?? 0}%`,                    (s.win_rate_pct ?? 0) > 50],
-                          ['Trades',      s.n_trades ?? 0,                              undefined],
+                          ['Trades',      `${s.n_trades ?? 0} / ${s.sample_trading_days ?? 56}d`,  undefined],
+                        ['Ann. Trades',  `≈${Math.round((s.n_trades ?? 0) / (s.sample_trading_days ?? 56) * 252)}/yr`, undefined],
                           ['Sharpe',      s.sharpe ?? 0,                                (s.sharpe ?? 0) > 0.3],
                           ['Max DD',      fmtRs(s.max_drawdown_sample),                 false],
                         ].map(([lbl, val, pos]) => (
