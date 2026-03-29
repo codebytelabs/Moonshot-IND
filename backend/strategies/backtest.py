@@ -293,6 +293,23 @@ def run_backtest(
         drifting_alpha = p_band + 0.30 * (0.5 + 0.5*(drift_mu/max(abs(drift_mu),0.001)))
         drifting_alpha = min(1.0, max(0.0, drifting_alpha))
 
+        # V-Score proxy: inverse vol score (alpha) + viscosity (alpha9)
+        # Alpha  = 1 - TSRank(HV20, 60) → high when vol is SUPPRESSED
+        # Alpha9 = TSRank(-ΔHV × |ret/HV|, 40) → high when vol DROPS as price moves
+        hv_window = df["hv20"].iloc[max(0, i-60): i+1]
+        inv_vol_score = 1.0 / max(hv, 0.01)
+        rank_inv_vol = float(np.sum((1.0 / hv_window.replace(0, np.nan).fillna(0.20)) <= inv_vol_score)) / max(len(hv_window) - 1, 1)
+        hv_change = float(df["hv20"].iloc[i] - df["hv20"].iloc[i-1]) if i > 0 else 0.0
+        viscosity_raw = (-hv_change) * (abs(fwd_ret) / max(hv, 0.01))
+        visc_window_vals = []
+        for vi in range(max(0, i-40), i+1):
+            if vi > 0:
+                dhv = float(df["hv20"].iloc[vi] - df["hv20"].iloc[vi-1])
+                fr  = float(df["close"].iloc[vi] / df["close"].iloc[vi-1] - 1)
+                hvv = max(0.01, float(df["hv20"].iloc[vi]))
+                visc_window_vals.append((-dhv) * (abs(fr) / hvv))
+        alpha9_vscore = float(np.sum(np.array(visc_window_vals[:-1]) <= viscosity_raw)) / max(len(visc_window_vals) - 1, 1) if len(visc_window_vals) > 1 else 0.5
+
         if strategy == "zen":
             alpha = rank_val
             composite = alpha
@@ -301,9 +318,12 @@ def run_backtest(
             composite = alpha
         elif strategy == "drifting":
             composite = drifting_alpha
+        elif strategy == "vscore":
+            composite = 0.55 * rank_inv_vol + 0.45 * alpha9_vscore
         else:  # zenCurve hybrid
             composite = 0.60 * rank_val + 0.40 * curv_alpha_val
 
+        # V-Score uses same alpha thresholds — high score = vol suppressed = bullish (sell PE)
         # Drifting direction: only enter when GBM says range-bound, drift sets direction
         if strategy == "drifting":
             if p_band > alpha_bull and drift_mu > 0:
@@ -383,9 +403,9 @@ def run_all_backtests(
     initial_capital: float = 50_000.0,
     lots: int = 1,
 ) -> dict:
-    """Run all four strategies and return comparative report."""
+    """Run all five strategies and return comparative report."""
     results = {}
-    for strat in ["zen", "curvature", "zenCurve", "drifting"]:
+    for strat in ["zen", "curvature", "zenCurve", "drifting", "vscore"]:
         r = run_backtest(strategy=strat, years=years,
                          initial_capital=initial_capital, lots=lots)
         results[strat] = r
